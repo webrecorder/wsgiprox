@@ -21,6 +21,12 @@ class WrappedWebSockHandler(WebSocketHandler):
         self.socket = sock
         self.rfile = reader
 
+        class FakeServer(object):
+            def __init__(self):
+                self.application = {}
+
+        self.server = FakeServer()
+
     @property
     def logger(self):
         return self._logger
@@ -34,8 +40,8 @@ class WSGIProxMiddleware(object):
     CERT_DL_P12 = '/wsgiprox-ca.p12'
 
     CA_ROOT_FILE = './ca/pywb-ca.pem'
-    CA_ROOT_NAME = 'wsgiprox https proxy replay CA'
     CA_CERTS_DIR = './ca/certs/'
+    CA_ROOT_NAME = 'wsgiprox https proxy replay CA'
 
     def __init__(self, wsgi, prefix_resolver, proxy_options=None):
         self.wsgi = wsgi
@@ -51,11 +57,14 @@ class WSGIProxMiddleware(object):
         ca_name = proxy_options.get('root_ca_name', self.CA_ROOT_NAME)
 
         certs_dir = proxy_options.get('certs_dir', self.CA_CERTS_DIR)
+
         self.ca = CertificateAuthority(ca_file=ca_file,
                                        certs_dir=certs_dir,
                                        ca_name=ca_name)
 
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
+
+        self.enable_ws = proxy_options.get('enable_websockets', True)
 
     def __call__(self, env, start_response):
         if env['REQUEST_METHOD'] == 'CONNECT':
@@ -67,46 +76,46 @@ class WSGIProxMiddleware(object):
             return self.wsgi(env, start_response)
 
     def handle_connect(self, env, start_response):
-        curr_sock = self.get_raw_socket(env)
-        if not curr_sock:
+        raw_sock = self.get_raw_socket(env)
+        if not raw_sock:
             start_response('405 HTTPS Proxy Not Supported',
                            [('Content-Length', '0')], exc_info)
             return []
 
-        ssl_sock = None
+        curr_sock = None
 
-        def ssl_start_response(statusline, headers, exc_info=None):
+        def inner_start_response(statusline, headers, exc_info=None):
             status_line = 'HTTP/1.1 ' + statusline + '\r\n'
-            ssl_sock.write(status_line.encode('iso-8859-1'))
+            curr_sock.send(status_line.encode('iso-8859-1'))
 
             for name, value in headers:
                 line = name + ': ' + value + '\r\n'
-                ssl_sock.write(line.encode('iso-8859-1'))
+                curr_sock.send(line.encode('iso-8859-1'))
 
-        ssl_sock = self.wrap_socket(env['PATH_INFO'], curr_sock)
+        scheme, curr_sock = self.wrap_socket(env['PATH_INFO'], raw_sock)
 
-        #buffreader = BufferedReader(ssl_sock, BUFF_SIZE)
-        buffreader = ssl_sock.makefile('rb', -1)
+        buffreader = curr_sock.makefile('rb', -1)
 
-        self.conv_https_env(env, buffreader)
+        self.conv_connect_env(env, buffreader, scheme)
 
-        # add websocket
-        if env.get('HTTP_UPGRADE', '') == 'websocket':
-            ws = WrappedWebSockHandler(ssl_sock, env, ssl_start_response, buffreader)
+        # check for websocket upgrade, if enabled
+        if self.enable_ws and env.get('HTTP_UPGRADE', '') == 'websocket':
+            ws = WrappedWebSockHandler(curr_sock, env, inner_start_response, buffreader)
             result = ws.upgrade_websocket()
-            ssl_sock.write(b'\r\n')
-            resp_iter = self.wsgi(env, ssl_start_response)
+            curr_sock.send(b'\r\n')
+            resp_iter = self.wsgi(env, inner_start_response)
             return []
 
-        resp_iter = self.wsgi(env, ssl_start_response)
-        ssl_sock.write(b'\r\n')
+        resp_iter = self.wsgi(env, inner_start_response)
+        curr_sock.send(b'\r\n')
 
         for obj in resp_iter:
             if obj:
-                ssl_sock.write(obj)
+                curr_sock.send(obj)
 
         buffreader.close()
-        ssl_sock.close()
+        if curr_sock != raw_sock:
+            curr_sock.close()
 
         return []
 
@@ -120,6 +129,9 @@ class WSGIProxMiddleware(object):
 
         hostname, port = host_port.split(':')
 
+        if port == '80':
+            return 'http', sock
+
         if not self.use_wildcard:
             certfile = self.ca.cert_for_host(hostname)
         else:
@@ -132,7 +144,7 @@ class WSGIProxMiddleware(object):
                                    ssl_version=ssl.PROTOCOL_SSLv23
                                    )
 
-        return ssl_sock
+        return 'https', ssl_sock
 
     def resolve(self, url, env):
         env['REQUEST_URI'] = self.prefix_resolver(url, env)
@@ -153,7 +165,7 @@ class WSGIProxMiddleware(object):
 
         self.resolve(full_uri, env)
 
-    def conv_https_env(self, env, buffreader):
+    def conv_connect_env(self, env, buffreader, scheme):
         statusline = buffreader.readline().rstrip()
         if six.PY3:
             statusline = statusline.decode('iso-8859-1')
@@ -165,8 +177,8 @@ class WSGIProxMiddleware(object):
 
         hostname, port = env['PATH_INFO'].split(':', 1)
 
-        env['wsgi.url_scheme'] = 'https'
-        env['wsgiprox.proxy_scheme'] = 'https'
+        env['wsgi.url_scheme'] = scheme
+        env['wsgiprox.proxy_scheme'] = scheme
 
         env['wsgiprox.proxy_host'] = hostname
         env['wsgiprox.proxy_port'] = port
@@ -175,7 +187,7 @@ class WSGIProxMiddleware(object):
 
         env['SERVER_PROTOCOL'] = statusparts[2].strip()
 
-        full_uri = 'https://' + hostname + statusparts[1]
+        full_uri = scheme + '://' + hostname + statusparts[1]
 
         self.resolve(full_uri, env)
 
