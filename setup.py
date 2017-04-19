@@ -32,10 +32,14 @@ setup(
         ],
     install_requires=[
         'six',
+        'certauth',
         ],
     zip_safe=True,
     data_files=[
     ],
+    extras_require={
+        'gevent-websocket':  ['gevent-websocket'],
+    },
     entry_points="""
         [console_scripts]
     """,
@@ -44,6 +48,9 @@ setup(
     tests_require=[
         'pytest',
         'pytest-cov',
+        'gevent',
+        'requests',
+        'websocket-client',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',

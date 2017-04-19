@@ -1,12 +1,18 @@
-from certauth.certauth import CertificateAuthority
-
 import socket
 import ssl
 
 from six.moves.urllib.parse import quote, urlsplit
-import six
 
-from geventwebsocket.handler import WebSocketHandler
+import six
+import os
+
+from certauth.certauth import CertificateAuthority
+
+try:
+    from geventwebsocket.handler import WebSocketHandler
+except:  #pragma: no cover
+    WebSocketHandler = object
+
 import logging
 
 
@@ -36,27 +42,35 @@ class WrappedWebSockHandler(WebSocketHandler):
 class WSGIProxMiddleware(object):
     DEF_MAGIC_NAME = 'wsgiprox'
 
-    CERT_DL_PEM = '/wsgiprox-ca.pem'
-    CERT_DL_P12 = '/wsgiprox-ca.p12'
-
-    CA_ROOT_FILE = './ca/pywb-ca.pem'
-    CA_CERTS_DIR = './ca/certs/'
     CA_ROOT_NAME = 'wsgiprox https proxy replay CA'
 
-    def __init__(self, wsgi, prefix_resolver, proxy_options=None):
+    CA_ROOT_DIR = os.path.join('.', 'ca')
+
+    CA_ROOT_FILE = 'wsgiprox-ca.pem'
+    CA_CERTS_DIR = 'certs'
+
+    def __init__(self, wsgi, prefix_resolver=None, proxy_options=None):
         self.wsgi = wsgi
+
+        if not prefix_resolver:
+            prefix_resolver = FixedResolver('/', ['wsgiprox'])
+
         self.prefix_resolver = prefix_resolver
 
         # HTTPS Only Options
         proxy_options = proxy_options or {}
 
-        ca_file = proxy_options.get('root_ca_file', self.CA_ROOT_FILE)
+        ca_root_dir = proxy_options.get('ca_root_dir', self.CA_ROOT_DIR)
+
+        ca_file = proxy_options.get('ca_file', self.CA_ROOT_FILE)
+        ca_file = os.path.join(ca_root_dir, ca_file)
 
         # attempt to create the root_ca_file if doesn't exist
         # (generally recommended to create this seperately)
-        ca_name = proxy_options.get('root_ca_name', self.CA_ROOT_NAME)
+        ca_name = proxy_options.get('ca_name', self.CA_ROOT_NAME)
 
-        certs_dir = proxy_options.get('certs_dir', self.CA_CERTS_DIR)
+        certs_dir = proxy_options.get('ca_certs_dir', self.CA_CERTS_DIR)
+        certs_dir = os.path.join(ca_root_dir, certs_dir)
 
         self.ca = CertificateAuthority(ca_file=ca_file,
                                        certs_dir=certs_dir,
@@ -65,6 +79,12 @@ class WSGIProxMiddleware(object):
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
         self.enable_ws = proxy_options.get('enable_websockets', True)
+        if WebSocketHandler == object:
+            self.enable_ws = None
+
+    @property
+    def root_ca_file(self):
+        return self.ca.ca_file
 
     def __call__(self, env, start_response):
         if env['REQUEST_METHOD'] == 'CONNECT':
@@ -94,13 +114,13 @@ class WSGIProxMiddleware(object):
 
         scheme, curr_sock = self.wrap_socket(env['PATH_INFO'], raw_sock)
 
-        buffreader = curr_sock.makefile('rb', -1)
+        reader = curr_sock.makefile('rb', -1)
 
-        self.conv_connect_env(env, buffreader, scheme)
+        self.conv_connect_env(env, reader, scheme)
 
         # check for websocket upgrade, if enabled
         if self.enable_ws and env.get('HTTP_UPGRADE', '') == 'websocket':
-            ws = WrappedWebSockHandler(curr_sock, env, inner_start_response, buffreader)
+            ws = WrappedWebSockHandler(curr_sock, env, inner_start_response, reader)
             result = ws.upgrade_websocket()
             curr_sock.send(b'\r\n')
             resp_iter = self.wsgi(env, inner_start_response)
@@ -113,7 +133,7 @@ class WSGIProxMiddleware(object):
             if obj:
                 curr_sock.send(obj)
 
-        buffreader.close()
+        reader.close()
         if curr_sock != raw_sock:
             curr_sock.close()
 
@@ -163,10 +183,14 @@ class WSGIProxMiddleware(object):
             if env.get('QUERY_STRING'):
                 full_uri += '?' + env['QUERY_STRING']
 
+        parts = urlsplit(full_uri)
+
+        env['wsgiprox.proxy_host_port'] = parts.netloc
+
         self.resolve(full_uri, env)
 
-    def conv_connect_env(self, env, buffreader, scheme):
-        statusline = buffreader.readline().rstrip()
+    def conv_connect_env(self, env, reader, scheme):
+        statusline = reader.readline().rstrip()
         if six.PY3:
             statusline = statusline.decode('iso-8859-1')
 
@@ -178,10 +202,8 @@ class WSGIProxMiddleware(object):
         hostname, port = env['PATH_INFO'].split(':', 1)
 
         env['wsgi.url_scheme'] = scheme
-        env['wsgiprox.proxy_scheme'] = scheme
 
-        env['wsgiprox.proxy_host'] = hostname
-        env['wsgiprox.proxy_port'] = port
+        env['wsgiprox.proxy_host_port'] = env['PATH_INFO']
 
         env['REQUEST_METHOD'] = statusparts[0]
 
@@ -192,7 +214,7 @@ class WSGIProxMiddleware(object):
         self.resolve(full_uri, env)
 
         while True:
-            line = buffreader.readline()
+            line = reader.readline()
             if line:
                 line = line.rstrip()
                 if six.PY3:
@@ -215,12 +237,9 @@ class WSGIProxMiddleware(object):
 
             env[name] = value
 
-        env['wsgi.input'] = buffreader
+        env['wsgi.input'] = reader
 
     def get_raw_socket(self, env):
-        if not self.ca:
-            return None
-
         sock = None
 
         if env.get('uwsgi.version'):  # pragma: no cover
@@ -244,7 +263,7 @@ class WSGIProxMiddleware(object):
                 if hasattr(input_, '_sock'):  # pragma: no cover
                     raw = input_._sock
                     sock = socket.socket(_sock=raw)  # pragma: no cover
-                elif hasattr(input_, 'raw'):
+                elif hasattr(input_, 'raw'):  #pragma: no cover
                     sock = input_.raw._sock
                 elif hasattr(input_, 'rfile'):
                     sock = input_.rfile.raw._sock
