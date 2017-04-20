@@ -17,8 +17,7 @@ For example, given a `WSGI <http://wsgi.readthedocs.io/en/latest/>`_ callable ``
     application = WSGIProxMiddleware(application, FixedResolver('/prefix/', ['wsgiprox']))
 
 
-With the above configuration and a server running on port ``8080``,
-the middleware would translate HTTP/S proxy connections to a non-proxy WSGI request, and pass to the wrapped application:
+With the above configuration, the middleware is configured to add a prefix of ``/prefix/`` to any url, unless it is to the "fixed" host ``wsgiprox``.  Assuming a WSGI server running on port 8080, the middleware would translate HTTP/S proxy connections to a non-proxy WSGI request, and pass to the wrapped application:
 
 *  Proxy Request: ``curl -x "localhost:8080" "http://example.com/path/file.html?A=B"``
 
@@ -29,7 +28,31 @@ the middleware would translate HTTP/S proxy connections to a non-proxy WSGI requ
 
    Translated to: ``curl "http://localhost:8080/prefix/https://example.com/path/file.html?A=B"``
    
+*  Proxy Request to fixed host: ``curl -k -x "localhost:8080" "https://wsgiprox/path/file.html?A=B"``
 
+   Ignoring prefix for fixed host: ``curl "http://localhost:8080/path/file.html?A=B"``
+   
+
+All standard WSGI ``environ`` fields are set to the expected values for the translated url.
+
+Additionally, the ``environ['wsgiprox.proxy_host_port']`` is set to the value of the HTTP CONNECT *host:port*
+
+
+Custom Resolvers
+================
+
+The provided ``FixedResolver`` simply prepends a fixed prefix to each url. A custom resolver could compute the final url in a different way. The resolver instance is called with the full url, and the original WSGI ``environ``. The result is the translated ``REQUEST_URI`` that is passed to the WSGI applictaion.
+
+For example, the following Resolver translates the url to a custom prefix based on the remote IP of the original request.
+
+.. code:: python
+
+  class Resolver(object):
+      def __call__(self, url, environ):
+          return '/' + environ['REMOTE_ADDR'] + url
+       
+  application = WSGIProxMiddleware(application, Resolver())
+      
 
 HTTPS CA
 ========
