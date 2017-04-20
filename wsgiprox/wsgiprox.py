@@ -90,7 +90,9 @@ class WSGIProxMiddleware(object):
         if env['REQUEST_METHOD'] == 'CONNECT':
             return self.handle_connect(env, start_response)
         else:
-            if env['PATH_INFO'].startswith('http://'):
+            self.ensure_request_uri(env)
+
+            if env['REQUEST_URI'].startswith('http://'):
                 self.conv_http_env(env)
 
             return self.wsgi(env, start_response)
@@ -99,7 +101,7 @@ class WSGIProxMiddleware(object):
         raw_sock = self.get_raw_socket(env)
         if not raw_sock:
             start_response('405 HTTPS Proxy Not Supported',
-                           [('Content-Length', '0')], exc_info)
+                           [('Content-Length', '0')])
             return []
 
         curr_sock = None
@@ -175,13 +177,18 @@ class WSGIProxMiddleware(object):
 
         env['QUERY_STRING'] = queryparts[1] if len(queryparts) > 1 else ''
 
-    def conv_http_env(self, env):
+    def ensure_request_uri(self, env):
         if 'REQUEST_URI' in env:
-            full_uri = env['REQUEST_URI']
-        else:
-            full_uri = env['PATH_INFO']
-            if env.get('QUERY_STRING'):
-                full_uri += '?' + env['QUERY_STRING']
+            return
+
+        full_uri = env['PATH_INFO']
+        if env.get('QUERY_STRING'):
+            full_uri += '?' + env['QUERY_STRING']
+
+        env['REQUEST_URI'] = full_uri
+
+    def conv_http_env(self, env):
+        full_uri = env['REQUEST_URI']
 
         parts = urlsplit(full_uri)
 

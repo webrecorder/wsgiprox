@@ -74,6 +74,10 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
+    def test_non_proxy(self):
+        res = requests.get('http://localhost:' + str(self.port) + '/path/file?foo=bar')
+        assert(res.text == 'Requested Url: /path/file?foo=bar')
+
     def test_http_websocket(self):
         pytest.importorskip('geventwebsocket.handler')
 
@@ -106,12 +110,12 @@ class TestWSGI(object):
 
         ws = env.get('wsgi.websocket')
         if ws:
-            msg = 'WS Request Url: ' + env.get('REQUEST_URI')
+            msg = 'WS Request Url: ' + env.get('REQUEST_URI', '')
             msg += ' Echo: ' + ws.receive()
             ws.send(msg)
             return []
 
-        result = 'Requested Url: ' + env.get('REQUEST_URI')
+        result = 'Requested Url: ' + env.get('REQUEST_URI', '')
         if env['REQUEST_METHOD'] == 'POST':
             result += ' Post Data: ' + env['wsgi.input'].read(int(env['CONTENT_LENGTH'])).decode('utf-8')
 
@@ -122,3 +126,7 @@ class TestWSGI(object):
         return [result]
 
 
+# ============================================================================
+if __name__ == "__main__":
+    app = WSGIProxMiddleware(TestWSGI(), FixedResolver('/prefix/', ['wsgiprox']))
+    WSGIServer(('localhost', 8080), app).serve_forever()
