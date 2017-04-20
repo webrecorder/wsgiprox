@@ -51,6 +51,7 @@ setup(
         'gevent',
         'requests',
         'websocket-client',
+        'waitress',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',

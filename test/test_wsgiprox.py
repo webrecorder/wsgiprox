@@ -20,12 +20,11 @@ from io import BytesIO
 class TestWSGIProx(object):
     @classmethod
     def setup_class(cls):
-        cls.orig_cwd = os.getcwd()
         cls.test_ca_dir = tempfile.mkdtemp()
-        os.chdir(cls.test_ca_dir)
 
         cls.app = WSGIProxMiddleware(TestWSGI(),
-                                     FixedResolver('/prefix/', ['wsgiprox']))
+                                     FixedResolver('/prefix/', ['wsgiprox']),
+                                     proxy_options={'ca_root_dir': cls.test_ca_dir})
 
         cls.server = WSGIServer(('localhost', 0), cls.app)
         cls.server.init_socket()
@@ -38,7 +37,6 @@ class TestWSGIProx(object):
                       }
 
     def teardown_class(cls):
-        os.chdir(cls.orig_cwd)
         shutil.rmtree(cls.test_ca_dir)
 
     def test_http(self):
@@ -101,6 +99,23 @@ class TestWSGIProx(object):
         ws.send('ssl message')
         msg = ws.recv()
         assert(msg == 'WS Request Url: /prefix/https://example.com/websocket?type=ws Echo: ssl message')
+
+    def test_unsupported_https_proxy(self):
+        from waitress.server import create_server
+        server = create_server(self.app, host='127.0.0.1', port=0)
+
+        port = server.effective_port
+
+        gevent.spawn(server.run)
+
+        proxies = {'http': 'localhost:' + port,
+                   'https': 'localhost:' + port
+                  }
+
+        with pytest.raises(requests.exceptions.ProxyError) as fh:
+            res = requests.get('https://example.com/path/file?foo=bar',
+                               proxies=proxies,
+                               verify=self.app.root_ca_file)
 
 
 # ============================================================================
