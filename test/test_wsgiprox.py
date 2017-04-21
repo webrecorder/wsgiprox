@@ -224,5 +224,5 @@ class TestWSGI(object):
 
 # ============================================================================
 if __name__ == "__main__":
-    app = WSGIProxMiddleware(TestWSGI(), FixedResolver('/prefix/', ['wsgiprox']))
+    app = WSGIProxMiddleware(TestWSGI(), FixedResolver('/prefix/'))
     WSGIServer(('localhost', 8080), app).serve_forever()

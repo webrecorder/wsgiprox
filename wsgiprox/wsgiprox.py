@@ -53,12 +53,17 @@ class WSGIProxMiddleware(object):
 
     def __init__(self, wsgi,
                  prefix_resolver=None,
-                 fixed_host_apps=None,
-                 proxy_options=None):
+                 fixed_host=None,
+                 proxy_options=None,
+                 fixed_host_apps=None):
 
         self._wsgi = wsgi
 
         self.prefix_resolver = prefix_resolver or FixedResolver()
+
+        fixed_host = fixed_host or self.FIXED_HOST
+        self.fixed_host_apps = fixed_host_apps or {}
+        self.fixed_host_apps[fixed_host] = ''
 
         # HTTPS Only Options
         proxy_options = proxy_options or {}
@@ -81,10 +86,8 @@ class WSGIProxMiddleware(object):
 
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
-        if not fixed_host_apps:
-            fixed_host_apps = {self.FIXED_HOST: CertDownloader(self.ca)}
-
-        self.fixed_host_apps = fixed_host_apps
+        if proxy_options.get('enable_cert_download', True):
+            self.fixed_host_apps[fixed_host] = CertDownloader(self.ca)
 
         self.enable_ws = proxy_options.get('enable_websockets', True)
         if WebSocketHandler == object:
