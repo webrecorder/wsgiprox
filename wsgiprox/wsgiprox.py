@@ -8,6 +8,8 @@ import os
 
 from certauth.certauth import CertificateAuthority
 
+from wsgiprox.resolvers import FixedResolver
+
 try:
     from geventwebsocket.handler import WebSocketHandler
 except:  #pragma: no cover
@@ -40,22 +42,24 @@ class WrappedWebSockHandler(WebSocketHandler):
 
 # ============================================================================
 class WSGIProxMiddleware(object):
-    DEF_MAGIC_NAME = 'wsgiprox'
+    FIXED_HOST = 'wsgiprox'
 
-    CA_ROOT_NAME = 'wsgiprox https proxy replay CA'
+    CA_ROOT_NAME = 'wsgiprox https proxy CA'
 
     CA_ROOT_DIR = os.path.join('.', 'ca')
 
     CA_ROOT_FILE = 'wsgiprox-ca.pem'
     CA_CERTS_DIR = 'certs'
 
-    def __init__(self, wsgi, prefix_resolver=None, proxy_options=None):
+    def __init__(self, wsgi,
+                 prefix_resolver=None,
+                 fixed_host=None,
+                 proxy_options=None):
+
         self.wsgi = wsgi
+        self.fixed_host = fixed_host or self.FIXED_HOST
 
-        if not prefix_resolver:
-            prefix_resolver = FixedResolver('/', ['wsgiprox'])
-
-        self.prefix_resolver = prefix_resolver
+        self.prefix_resolver = prefix_resolver or FixedResolver()
 
         # HTTPS Only Options
         proxy_options = proxy_options or {}
@@ -93,6 +97,10 @@ class WSGIProxMiddleware(object):
             self.ensure_request_uri(env)
 
             if env['REQUEST_URI'].startswith('http://'):
+                res = self.require_auth(env, start_response)
+                if res is not None:
+                    return res
+
                 self.conv_http_env(env)
 
             return self.wsgi(env, start_response)
@@ -103,6 +111,10 @@ class WSGIProxMiddleware(object):
             start_response('405 HTTPS Proxy Not Supported',
                            [('Content-Length', '0')])
             return []
+
+        res = self.require_auth(env, start_response)
+        if res is not None:
+            return res
 
         curr_sock = None
 
@@ -168,8 +180,32 @@ class WSGIProxMiddleware(object):
 
         return 'https', ssl_sock
 
+    def require_auth(self, env, start_response):
+        if not hasattr(self.prefix_resolver, 'require_auth'):
+            return
+
+        auth_req = self.prefix_resolver.require_auth(env)
+
+        if not auth_req:
+            return
+
+        auth_req = 'Basic realm="{0}"'.format(auth_req)
+        headers = [('Proxy-Authenticate', auth_req),
+                   ('Content-Length', '0')]
+
+        start_response('407 Proxy Authentication', headers)
+        return []
+
     def resolve(self, url, env):
-        env['REQUEST_URI'] = self.prefix_resolver(url, env)
+        if env['wsgiprox.proxy_host_port'].split(':')[0] == self.fixed_host:
+            parts = urlsplit(url)
+            full = parts.path
+            if parts.query:
+                full += '?' + parts.query
+
+            env['REQUEST_URI'] = full
+        else:
+            env['REQUEST_URI'] = self.prefix_resolver(url, env)
 
         queryparts = env['REQUEST_URI'].split('?', 1)
 
@@ -201,7 +237,7 @@ class WSGIProxMiddleware(object):
         if six.PY3:
             statusline = statusline.decode('iso-8859-1')
 
-        statusparts = statusline.split(' ')
+        statusparts = statusline.split(' ', 2)
 
         if len(statusparts) < 3:
             raise Exception('Invalid Proxy Request: ' + statusline)
@@ -277,21 +313,5 @@ class WSGIProxMiddleware(object):
 
         return sock
 
-
-# ============================================================================
-class FixedResolver(object):
-    def __init__(self, fixed_prefix, identity_hosts):
-        self.identity_hosts = identity_hosts
-        self.fixed_prefix = fixed_prefix
-
-    def __call__(self, url, env):
-        parts = urlsplit(url)
-        if parts.netloc in self.identity_hosts:
-            full = parts.path
-            if parts.query:
-                full += '?' + parts.query
-            return full
-        else:
-            return self.fixed_prefix + url
 
 

@@ -15,9 +15,10 @@ For example, given a `WSGI <http://wsgi.readthedocs.io/en/latest/>`_ callable ``
 
 .. code:: python
 
-    from wsgiprox.wsgiprox import WSGIProxMiddleware, FixedResolver
+    from wsgiprox.wsgiprox import WSGIProxMiddleware
+    from wsgiprox.resolvers import FixedResolver
 
-    application = WSGIProxMiddleware(application, FixedResolver('/prefix/', ['wsgiprox']))
+    application = WSGIProxMiddleware(application, FixedResolver('/prefix/'), 'wsgiprox')
 
 
 With the above configuration, the middleware is configured to add a prefix of ``/prefix/`` to any url, unless it is to the "fixed" host ``wsgiprox``.  Assuming a WSGI server running on port 8080, the middleware would translate HTTP/S proxy connections to a non-proxy WSGI request, and pass to the wrapped application:
@@ -45,6 +46,8 @@ Custom Resolvers
 ================
 
 The provided ``FixedResolver`` simply prepends a fixed prefix to each url. A custom resolver could compute the final url in a different way. The resolver instance is called with the full url, and the original WSGI ``environ``. The result is the translated ``REQUEST_URI`` that is passed to the WSGI applictaion.
+
+See `resolvers.py <wsgiprox/resolvers.py>`_ for all available resolvers.
 
 For example, the following Resolver translates the url to a custom prefix based on the remote IP of the original request.
 

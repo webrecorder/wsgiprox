@@ -6,10 +6,13 @@ import gevent
 import requests
 import websocket
 import pytest
+import base64
 
-from wsgiprox.wsgiprox import WSGIProxMiddleware, FixedResolver
+from wsgiprox.wsgiprox import WSGIProxMiddleware
+from wsgiprox.resolvers import FixedResolver, ProxyAuthResolver
 
 import shutil
+import six
 import os
 import tempfile
 
@@ -23,8 +26,10 @@ class TestWSGIProx(object):
         cls.test_ca_dir = tempfile.mkdtemp()
 
         cls.app = WSGIProxMiddleware(TestWSGI(),
-                                     FixedResolver('/prefix/', ['wsgiprox']),
+                                     FixedResolver('/prefix/'),
                                      proxy_options={'ca_root_dir': cls.test_ca_dir})
+
+        cls.auth_resolver = ProxyAuthResolver()
 
         cls.server = WSGIServer(('localhost', 0), cls.app)
         cls.server.init_socket()
@@ -32,12 +37,24 @@ class TestWSGIProx(object):
 
         gevent.spawn(cls.server.serve_forever)
 
-        cls.proxies = {'http': 'localhost:' + cls.port,
-                       'https': 'localhost:' + cls.port
-                      }
+        cls.proxies = cls.proxy_dict(cls.port)
 
+    @classmethod
     def teardown_class(cls):
         shutil.rmtree(cls.test_ca_dir)
+
+    @classmethod
+    def proxy_dict(cls, port, host='localhost'):
+        return {'http': 'http://{0}:{1}'.format(host, port),
+                'https': 'https://{0}:{1}'.format(host, port)
+               }
+
+    def b64encode(self, string):
+        string = base64.b64encode(string.encode('utf-8'))
+        if six.PY3:
+            string = string.decode('utf-8')
+
+        return string
 
     def test_http(self):
         res = requests.get('http://example.com/path/file?foo=bar',
@@ -100,6 +117,41 @@ class TestWSGIProx(object):
         msg = ws.recv()
         assert(msg == 'WS Request Url: /prefix/https://example.com/websocket?type=ws Echo: ssl message')
 
+    def test_http_proxy_auth(self):
+        self.app.prefix_resolver = self.auth_resolver
+
+        with pytest.raises(requests.exceptions.HTTPError) as err:
+            res = requests.get('http://example.com/path/file?foo=bar',
+                               proxies=self.proxies)
+
+            res.raise_for_status()
+
+        assert '407 ' in str(err.value)
+
+        proxies = self.proxy_dict(self.port, 'other-prefix:ignore@localhost')
+
+        res = requests.get('http://example.com/path/file?foo=bar',
+                           proxies=proxies)
+
+        assert(res.text == 'Requested Url: /other-prefix/http://example.com/path/file?foo=bar')
+
+    def test_https_proxy_auth(self):
+        self.app.prefix_resolver = self.auth_resolver
+
+        with pytest.raises(requests.exceptions.ProxyError) as err:
+            res = requests.get('https://example.com/path/file?foo=bar',
+                               proxies=self.proxies)
+
+        assert '407 ' in str(err.value)
+
+        proxies = self.proxy_dict(self.port, 'other-prefix:ignore@localhost')
+
+        res = requests.get('https://example.com/path/file?foo=bar',
+                           proxies=proxies,
+                           verify=self.app.root_ca_file)
+
+        assert(res.text == 'Requested Url: /other-prefix/https://example.com/path/file?foo=bar')
+
     def test_unsupported_https_proxy(self):
         from waitress.server import create_server
         server = create_server(self.app, host='127.0.0.1', port=0)
@@ -108,15 +160,14 @@ class TestWSGIProx(object):
 
         gevent.spawn(server.run)
 
-        proxies = {'http': 'localhost:' + port,
-                   'https': 'localhost:' + port
-                  }
+        proxies = self.proxy_dict(port)
 
-        with pytest.raises(requests.exceptions.ProxyError) as fh:
+        with pytest.raises(requests.exceptions.ProxyError) as err:
             res = requests.get('https://example.com/path/file?foo=bar',
                                proxies=proxies,
                                verify=self.app.root_ca_file)
 
+        assert '405 ' in str(err.value)
 
 # ============================================================================
 class TestWSGI(object):
