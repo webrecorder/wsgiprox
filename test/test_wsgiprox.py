@@ -76,18 +76,48 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Requested Url: /prefix/https://example.com/path/post Post Data: ABC=1&xyz=2')
 
-    def test_http_identity(self):
+    def test_http_fixed_host(self):
         res = requests.get('http://wsgiprox/path/file?foo=bar',
                            proxies=self.proxies)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
-    def test_https_identity(self):
+    def test_https_fixed_host(self):
         res = requests.get('https://wsgiprox/path/file?foo=bar',
                            proxies=self.proxies,
                            verify=self.app.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
+
+    def test_download_pem(self):
+        res = requests.get('http://wsgiprox/download/pem',
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert res.headers['content-type'] == 'application/x-x509-ca-cert'
+
+        res2 = requests.get('https://wsgiprox/download/pem',
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert res2.headers['content-type'] == 'application/x-x509-ca-cert'
+
+        assert res.content == res2.content
+
+    def test_download_pkcs12(self):
+        res = requests.get('http://wsgiprox/download/p12',
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert res.headers['content-type'] == 'application/x-pkcs12'
+
+        res2 = requests.get('https://wsgiprox/download/p12',
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert res2.headers['content-type'] == 'application/x-pkcs12'
+
+        #assert res.content == res2.content
 
     def test_non_proxy(self):
         res = requests.get('http://localhost:' + str(self.port) + '/path/file?foo=bar')

@@ -53,11 +53,10 @@ class WSGIProxMiddleware(object):
 
     def __init__(self, wsgi,
                  prefix_resolver=None,
-                 fixed_host=None,
+                 fixed_host_apps=None,
                  proxy_options=None):
 
-        self.wsgi = wsgi
-        self.fixed_host = fixed_host or self.FIXED_HOST
+        self._wsgi = wsgi
 
         self.prefix_resolver = prefix_resolver or FixedResolver()
 
@@ -82,6 +81,11 @@ class WSGIProxMiddleware(object):
 
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
+        if not fixed_host_apps:
+            fixed_host_apps = {self.FIXED_HOST: CertDownloader(self.ca)}
+
+        self.fixed_host_apps = fixed_host_apps
+
         self.enable_ws = proxy_options.get('enable_websockets', True)
         if WebSocketHandler == object:
             self.enable_ws = None
@@ -89,6 +93,21 @@ class WSGIProxMiddleware(object):
     @property
     def root_ca_file(self):
         return self.ca.ca_file
+
+    def wsgi(self, env, start_response):
+        # see if there if request to 'fixed host'
+        # if so, try to see if there is an wsgi app set
+        # and if it returns something
+        hostname = env.get('wsgiprox.fixed_host')
+        if hostname:
+            app = self.fixed_host_apps.get(hostname)
+            if app:
+                res = app(env, start_response)
+                if res is not None:
+                    return res
+
+        # call upstream wsgi app
+        return self._wsgi(env, start_response)
 
     def __call__(self, env, start_response):
         if env['REQUEST_METHOD'] == 'CONNECT':
@@ -197,13 +216,15 @@ class WSGIProxMiddleware(object):
         return []
 
     def resolve(self, url, env):
-        if env['wsgiprox.proxy_host_port'].split(':')[0] == self.fixed_host:
+        hostname = env['wsgiprox.proxy_host_port'].split(':')[0]
+        if hostname in self.fixed_host_apps.keys():
             parts = urlsplit(url)
             full = parts.path
             if parts.query:
                 full += '?' + parts.query
 
             env['REQUEST_URI'] = full
+            env['wsgiprox.fixed_host'] = hostname
         else:
             env['REQUEST_URI'] = self.prefix_resolver(url, env)
 
@@ -313,5 +334,37 @@ class WSGIProxMiddleware(object):
 
         return sock
 
+
+# ============================================================================
+class CertDownloader(object):
+    DL_PEM = '/download/pem'
+    DL_P12 = '/download/p12'
+
+    def __init__(self, ca):
+        self.ca = ca
+
+    def __call__(self, env, start_response):
+        path = env.get('PATH_INFO')
+
+        if path == self.DL_PEM:
+            buff = b''
+            with open(self.ca.ca_file, 'rb') as fh:
+                buff = fh.read()
+
+            content_type = 'application/x-x509-ca-cert'
+
+        elif path == self.DL_P12:
+            buff = self.ca.get_root_PKCS12()
+
+            content_type = 'application/x-pkcs12'
+
+        else:
+            return None
+
+        headers = [('Content-Length', str(len(buff))),
+                   ('Content-Type', content_type)]
+
+        start_response('200 OK', headers)
+        return [buff]
 
 
