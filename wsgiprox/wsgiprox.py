@@ -61,7 +61,7 @@ class WSGIProxMiddleware(object):
 
         self.prefix_resolver = prefix_resolver or FixedResolver()
 
-        fixed_host = fixed_host or self.FIXED_HOST
+        self.fixed_host = fixed_host or self.FIXED_HOST
         self.fixed_host_apps = fixed_host_apps or {}
         self.fixed_host_apps[fixed_host] = ''
 
@@ -87,7 +87,7 @@ class WSGIProxMiddleware(object):
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
         if proxy_options.get('enable_cert_download', True):
-            self.fixed_host_apps[fixed_host] = CertDownloader(self.ca)
+            self.fixed_host_apps[self.fixed_host] = CertDownloader(self.ca)
 
         self.enable_ws = proxy_options.get('enable_websockets', True)
         if WebSocketHandler == object:
@@ -98,10 +98,10 @@ class WSGIProxMiddleware(object):
         return self.ca.ca_file
 
     def wsgi(self, env, start_response):
-        # see if there if request to 'fixed host'
+        # see if the host matches one of the fixed hosts
         # if so, try to see if there is an wsgi app set
         # and if it returns something
-        hostname = env.get('wsgiprox.fixed_host')
+        hostname = env.get('wsgiprox.match_host')
         if hostname:
             app = self.fixed_host_apps.get(hostname)
             if app:
@@ -227,9 +227,11 @@ class WSGIProxMiddleware(object):
                 full += '?' + parts.query
 
             env['REQUEST_URI'] = full
-            env['wsgiprox.fixed_host'] = hostname
+            env['wsgiprox.match_host'] = hostname
         else:
             env['REQUEST_URI'] = self.prefix_resolver(url, env)
+
+        env['wsgiprox.fixed_host'] = self.fixed_host
 
         queryparts = env['REQUEST_URI'].split('?', 1)
 
