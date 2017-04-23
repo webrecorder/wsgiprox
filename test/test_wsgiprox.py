@@ -26,7 +26,7 @@ class TestWSGIProx(object):
         cls.test_ca_dir = tempfile.mkdtemp()
 
         cls.app = WSGIProxMiddleware(TestWSGI(),
-                                     FixedResolver('/prefix/'),
+                                     '/prefix/',
                                      proxy_options={'ca_root_dir': cls.test_ca_dir})
 
         cls.auth_resolver = ProxyAuthResolver()
@@ -68,6 +68,13 @@ class TestWSGIProx(object):
                            verify=self.app.root_ca_file)
 
         assert(res.text == 'Requested Url: /prefix/https://example.com/path/file?foo=bar')
+
+    def test_http_post(self):
+        res = requests.post('http://example.com/path/post', data=BytesIO(b'ABC=1&xyz=2'),
+                            proxies=self.proxies,
+                            verify=self.app.root_ca_file)
+
+        assert(res.text == 'Requested Url: /prefix/http://example.com/path/post Post Data: ABC=1&xyz=2')
 
     def test_https_post(self):
         res = requests.post('https://example.com/path/post', data=BytesIO(b'ABC=1&xyz=2'),
@@ -146,6 +153,18 @@ class TestWSGIProx(object):
         ws.send('ssl message')
         msg = ws.recv()
         assert(msg == 'WS Request Url: /prefix/https://example.com/websocket?type=ws Echo: ssl message')
+
+    def test_https_websocket_fixed_host(self):
+        pytest.importorskip('geventwebsocket.handler')
+
+        ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
+        ws.connect('wss://wsgiprox/websocket?type=ws',
+                   http_proxy_host='localhost',
+                   http_proxy_port=self.port)
+
+        ws.send('ssl message')
+        msg = ws.recv()
+        assert(msg == 'WS Request Url: /websocket?type=ws Echo: ssl message')
 
     def test_http_proxy_auth(self):
         self.app.prefix_resolver = self.auth_resolver

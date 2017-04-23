@@ -19,12 +19,12 @@ class PyTest(TestCommand):
 
 setup(
     name='wsgiprox',
-    version='1.1',
+    version='1.1.1',
     author='Ilya Kreymer',
     author_email='ikreymer@gmail.com',
     license='Apache 2.0',
     packages=find_packages(),
-    url='https://github.com/ikreymer/wsgiprox',
+    url='https://github.com/webrecorder/wsgiprox',
     description='HTTP/S proxy with WebSockets over WSGI',
     long_description=open('README.rst').read(),
     provides=[

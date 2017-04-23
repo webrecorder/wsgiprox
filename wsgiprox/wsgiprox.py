@@ -42,7 +42,7 @@ class WrappedWebSockHandler(WebSocketHandler):
 
 # ============================================================================
 class WSGIProxMiddleware(object):
-    FIXED_HOST = 'wsgiprox'
+    DEFAULT_HOST = 'wsgiprox'
 
     CA_ROOT_NAME = 'wsgiprox https proxy CA'
 
@@ -53,17 +53,24 @@ class WSGIProxMiddleware(object):
 
     def __init__(self, wsgi,
                  prefix_resolver=None,
+                 download_host=None,
                  fixed_host=None,
                  proxy_options=None,
                  fixed_host_apps=None):
 
         self._wsgi = wsgi
 
+        if isinstance(prefix_resolver, str):
+            prefix_resolver = FixedResolver(prefix_resolver)
+
         self.prefix_resolver = prefix_resolver or FixedResolver()
 
-        self.fixed_host = fixed_host or self.FIXED_HOST
         self.fixed_host_apps = fixed_host_apps or {}
-        self.fixed_host_apps[fixed_host] = ''
+
+        self.fixed_host = fixed_host or self.DEFAULT_HOST
+
+        if self.fixed_host not in self.fixed_host_apps:
+            self.fixed_host_apps[self.fixed_host] = ''
 
         # HTTPS Only Options
         proxy_options = proxy_options or {}
@@ -87,7 +94,8 @@ class WSGIProxMiddleware(object):
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
         if proxy_options.get('enable_cert_download', True):
-            self.fixed_host_apps[self.fixed_host] = CertDownloader(self.ca)
+            download_host = download_host or self.DEFAULT_HOST
+            self.fixed_host_apps[download_host] = CertDownloader(self.ca)
 
         self.enable_ws = proxy_options.get('enable_websockets', True)
         if WebSocketHandler == object:
@@ -159,6 +167,7 @@ class WSGIProxMiddleware(object):
             ws = WrappedWebSockHandler(curr_sock, env, inner_start_response, reader)
             result = ws.upgrade_websocket()
             curr_sock.send(b'\r\n')
+
             resp_iter = self.wsgi(env, inner_start_response)
             return []
 
@@ -260,6 +269,7 @@ class WSGIProxMiddleware(object):
 
     def conv_connect_env(self, env, reader, scheme):
         statusline = reader.readline().rstrip()
+
         if six.PY3:
             statusline = statusline.decode('iso-8859-1')
 
