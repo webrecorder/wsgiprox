@@ -20,14 +20,14 @@ import logging
 
 # ============================================================================
 class WrappedWebSockHandler(WebSocketHandler):
-    def __init__(self, sock, environ, start_response, reader):
-        self.environ = environ
-        self.start_response = start_response
+    def __init__(self, connect_handler):
+        self.environ = connect_handler.environ
+        self.start_response = connect_handler.start_response
         self.request_version = 'HTTP/1.1'
         self._logger = logging.getLogger(__file__)
 
-        self.socket = sock
-        self.rfile = reader
+        self.socket = connect_handler.curr_sock
+        self.rfile = connect_handler.reader
 
         class FakeServer(object):
             def __init__(self):
@@ -38,6 +38,92 @@ class WrappedWebSockHandler(WebSocketHandler):
     @property
     def logger(self):
         return self._logger
+
+
+
+# ============================================================================
+class ConnectHandler(object):
+    def __init__(self, curr_sock, environ, wsgi):
+        self.curr_sock = curr_sock
+        self.environ = environ
+        self.wsgi = wsgi
+
+        self.reader = curr_sock.makefile('rb', -1)
+
+        self.is_chunked = False
+        self.headers_finished = False
+
+    def write(self, data):
+        self.finish_headers()
+        self.curr_sock.send(data)
+
+    def finish_headers(self):
+        if not self.headers_finished:
+            self.curr_sock.send(b'\r\n')
+            self.headers_finished = True
+
+    def start_response(self, statusline, headers, exc_info=None):
+        status_line = 'HTTP/1.1 ' + statusline + '\r\n'
+        self.curr_sock.send(status_line.encode('iso-8859-1'))
+
+        found_cl = False
+
+        for name, value in headers:
+            if not found_cl and name.lower() == 'content-length':
+                found_cl = True
+
+            line = name + ': ' + value + '\r\n'
+            self.curr_sock.send(line.encode('iso-8859-1'))
+
+        if not found_cl:
+            self.curr_sock.send(b'Transfer-Encoding: chunked\r\n')
+            self.is_chunked = True
+
+        return self.write
+
+    def finish_response(self, raw_sock):
+        resp_iter = self.wsgi(self.environ, self.start_response)
+
+        # finish headers after wsgi call
+        self.finish_headers()
+
+        if self.is_chunked:
+            resp_iter = self.chunk_encode(resp_iter)
+
+        for obj in resp_iter:
+            if obj:
+                self.curr_sock.send(obj)
+
+        self.reader.close()
+        if self.curr_sock != raw_sock:
+            self.curr_sock.close()
+
+    def handle_ws(self):
+        ws = WrappedWebSockHandler(self)
+        result = ws.upgrade_websocket()
+
+        # start_response() already called in upgrade_websocket()
+        # flush headers before starting wsgi
+        self.finish_headers()
+
+        # wsgi expected to access established 'wsgi.websocket'
+
+        # do-nothing start-response
+        def ignore_sr(s, h, e=None):
+            return []
+
+        self.wsgi(self.environ, ignore_sr)
+
+    @classmethod
+    def chunk_encode(cls, orig_iter):
+        for chunk in orig_iter:
+            chunk_len = len(chunk)
+            if chunk_len:
+                yield b'%X\r\n' % chunk_len
+                yield chunk
+                yield b'\r\n'
+
+        yield b'0\r\n\r\n'
 
 
 # ============================================================================
@@ -109,7 +195,7 @@ class WSGIProxMiddleware(object):
         # see if the host matches one of the fixed hosts
         # if so, try to see if there is an wsgi app set
         # and if it returns something
-        hostname = env.get('wsgiprox.match_host')
+        hostname = env.get('wsgiprox.matched_proxy_host')
         if hostname:
             app = self.fixed_host_apps.get(hostname)
             if app:
@@ -146,41 +232,17 @@ class WSGIProxMiddleware(object):
         if res is not None:
             return res
 
-        curr_sock = None
-
-        def inner_start_response(statusline, headers, exc_info=None):
-            status_line = 'HTTP/1.1 ' + statusline + '\r\n'
-            curr_sock.send(status_line.encode('iso-8859-1'))
-
-            for name, value in headers:
-                line = name + ': ' + value + '\r\n'
-                curr_sock.send(line.encode('iso-8859-1'))
-
         scheme, curr_sock = self.wrap_socket(env['PATH_INFO'], raw_sock)
 
-        reader = curr_sock.makefile('rb', -1)
+        connect_handler = ConnectHandler(curr_sock, env, self.wsgi)
 
-        self.conv_connect_env(env, reader, scheme)
+        self.conv_connect_env(env, connect_handler.reader, scheme)
 
         # check for websocket upgrade, if enabled
         if self.enable_ws and env.get('HTTP_UPGRADE', '') == 'websocket':
-            ws = WrappedWebSockHandler(curr_sock, env, inner_start_response, reader)
-            result = ws.upgrade_websocket()
-            curr_sock.send(b'\r\n')
-
-            resp_iter = self.wsgi(env, inner_start_response)
-            return []
-
-        resp_iter = self.wsgi(env, inner_start_response)
-        curr_sock.send(b'\r\n')
-
-        for obj in resp_iter:
-            if obj:
-                curr_sock.send(obj)
-
-        reader.close()
-        if curr_sock != raw_sock:
-            curr_sock.close()
+            connect_handler.handle_ws()
+        else:
+            connect_handler.finish_response(raw_sock)
 
         return []
 
@@ -227,8 +289,8 @@ class WSGIProxMiddleware(object):
         start_response('407 Proxy Authentication', headers)
         return []
 
-    def resolve(self, url, env):
-        hostname = env['wsgiprox.proxy_host_port'].split(':')[0]
+    def resolve(self, url, env, host_port):
+        hostname = host_port.split(':')[0]
         if hostname in self.fixed_host_apps.keys():
             parts = urlsplit(url)
             full = parts.path
@@ -236,11 +298,11 @@ class WSGIProxMiddleware(object):
                 full += '?' + parts.query
 
             env['REQUEST_URI'] = full
-            env['wsgiprox.match_host'] = hostname
+            env['wsgiprox.matched_proxy_host'] = hostname
         else:
             env['REQUEST_URI'] = self.prefix_resolver(url, env)
 
-        env['wsgiprox.fixed_host'] = self.fixed_host
+        env['wsgiprox.proxy_host'] = self.fixed_host
 
         queryparts = env['REQUEST_URI'].split('?', 1)
 
@@ -263,9 +325,7 @@ class WSGIProxMiddleware(object):
 
         parts = urlsplit(full_uri)
 
-        env['wsgiprox.proxy_host_port'] = parts.netloc
-
-        self.resolve(full_uri, env)
+        self.resolve(full_uri, env, parts.netloc)
 
     def conv_connect_env(self, env, reader, scheme):
         statusline = reader.readline().rstrip()
@@ -282,7 +342,7 @@ class WSGIProxMiddleware(object):
 
         env['wsgi.url_scheme'] = scheme
 
-        env['wsgiprox.proxy_host_port'] = env['PATH_INFO']
+        host_port = env['PATH_INFO']
 
         env['REQUEST_METHOD'] = statusparts[0]
 
@@ -290,7 +350,7 @@ class WSGIProxMiddleware(object):
 
         full_uri = scheme + '://' + hostname + statusparts[1]
 
-        self.resolve(full_uri, env)
+        self.resolve(full_uri, env, host_port)
 
         while True:
             line = reader.readline()
@@ -318,7 +378,8 @@ class WSGIProxMiddleware(object):
 
         env['wsgi.input'] = reader
 
-    def get_raw_socket(self, env):
+    @classmethod
+    def get_raw_socket(cls, env):
         sock = None
 
         if env.get('uwsgi.version'):  # pragma: no cover
