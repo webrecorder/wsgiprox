@@ -29,7 +29,11 @@ class TestWSGIProx(object):
 
         cls.app = WSGIProxMiddleware(TestWSGI(),
                                      '/prefix/',
-                                     proxy_options={'ca_root_dir': cls.test_ca_dir})
+                                     proxy_options={'ca_root_dir': cls.test_ca_dir},
+                                     proxy_apps={'proxy-alias': '',
+                                                 'proxy-app-1': CustomApp()
+                                                }
+                                    )
 
         cls.auth_resolver = ProxyAuthResolver()
 
@@ -53,12 +57,12 @@ class TestWSGIProx(object):
 
     @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_non_chunked(self, scheme):
-        res = requests.get('{0}://example.com/path/file?foo=bar'.format(scheme),
+        res = requests.get('{0}://example.com/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
                            verify=self.app.root_ca_file)
 
         assert(res.headers['Content-Length'] != '')
-        assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar'.format(scheme))
+        assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
 
     @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_chunked(self, scheme):
@@ -109,6 +113,22 @@ class TestWSGIProx(object):
                            verify=self.app.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
+
+    @pytest.mark.parametrize("scheme", ['http', 'https'])
+    def test_alt_host(self, scheme):
+        res = requests.get('{0}://proxy-alias/path/file?foo=bar&addproxyhost=true'.format(scheme),
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert(res.text == 'Requested Url: /path/file?foo=bar&addproxyhost=true Proxy Host: proxy-alias')
+
+    @pytest.mark.parametrize("scheme", ['http', 'https'])
+    def test_proxy_app(self, scheme):
+        res = requests.get('{0}://proxy-app-1/path/file'.format(scheme),
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert(res.text == 'Custom App: proxy-app-1 req to /path/file')
 
     @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_download_pem(self, scheme):
@@ -221,6 +241,19 @@ class TestWSGIProx(object):
 
 
 # ============================================================================
+class CustomApp(object):
+    def __call__(self, env, start_response):
+        result = 'Custom App: ' + env['wsgiprox.proxy_host'] + ' req to ' + env['PATH_INFO']
+        result = result.encode('iso-8859-1')
+
+        headers = [('Content-Length', str(len(result)))]
+
+        start_response('200 OK', headers=headers)
+
+        return iter([result])
+
+
+# ============================================================================
 class TestWSGI(object):
     def __call__(self, env, start_response):
         status = '200 OK'
@@ -237,6 +270,9 @@ class TestWSGI(object):
         result = 'Requested Url: ' + env.get('REQUEST_URI', '')
         if env['REQUEST_METHOD'] == 'POST':
             result += ' Post Data: ' + env['wsgi.input'].read(int(env['CONTENT_LENGTH'])).decode('utf-8')
+
+        if params.get('addproxyhost') == 'true':
+            result += ' Proxy Host: ' + env.get('wsgiprox.proxy_host', '')
 
         result = result.encode('iso-8859-1')
 

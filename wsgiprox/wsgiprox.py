@@ -170,9 +170,9 @@ class WSGIProxMiddleware(object):
     def __init__(self, wsgi,
                  prefix_resolver=None,
                  download_host=None,
-                 fixed_host=None,
+                 proxy_host=None,
                  proxy_options=None,
-                 fixed_host_apps=None):
+                 proxy_apps=None):
 
         self._wsgi = wsgi
 
@@ -181,12 +181,12 @@ class WSGIProxMiddleware(object):
 
         self.prefix_resolver = prefix_resolver or FixedResolver()
 
-        self.fixed_host_apps = fixed_host_apps or {}
+        self.proxy_apps = proxy_apps or {}
 
-        self.fixed_host = fixed_host or self.DEFAULT_HOST
+        self.proxy_host = proxy_host or self.DEFAULT_HOST
 
-        if self.fixed_host not in self.fixed_host_apps:
-            self.fixed_host_apps[self.fixed_host] = ''
+        if self.proxy_host not in self.proxy_apps:
+            self.proxy_apps[self.proxy_host] = None
 
         # HTTPS Only Options
         proxy_options = proxy_options or {}
@@ -211,7 +211,7 @@ class WSGIProxMiddleware(object):
 
         if proxy_options.get('enable_cert_download', True):
             download_host = download_host or self.DEFAULT_HOST
-            self.fixed_host_apps[download_host] = CertDownloader(self.ca)
+            self.proxy_apps[download_host] = CertDownloader(self.ca)
 
         self.enable_ws = proxy_options.get('enable_websockets', True)
         if WebSocketHandler == object:
@@ -222,12 +222,12 @@ class WSGIProxMiddleware(object):
         return self.ca.ca_file
 
     def wsgi(self, env, start_response):
-        # see if the host matches one of the fixed hosts
+        # see if the host matches one of the proxy app hosts
         # if so, try to see if there is an wsgi app set
         # and if it returns something
         hostname = env.get('wsgiprox.matched_proxy_host')
         if hostname:
-            app = self.fixed_host_apps.get(hostname)
+            app = self.proxy_apps.get(hostname)
             if app:
                 res = app(env, start_response)
                 if res is not None:
@@ -321,7 +321,7 @@ class WSGIProxMiddleware(object):
 
     def resolve(self, url, env, host_port):
         hostname = host_port.split(':')[0]
-        if hostname in self.fixed_host_apps.keys():
+        if hostname in self.proxy_apps.keys():
             parts = urlsplit(url)
             full = parts.path
             if parts.query:
@@ -329,10 +329,10 @@ class WSGIProxMiddleware(object):
 
             env['REQUEST_URI'] = full
             env['wsgiprox.matched_proxy_host'] = hostname
+            env['wsgiprox.proxy_host'] = hostname
         else:
             env['REQUEST_URI'] = self.prefix_resolver(url, env)
-
-        env['wsgiprox.proxy_host'] = self.fixed_host
+            env['wsgiprox.proxy_host'] = self.proxy_host
 
         queryparts = env['REQUEST_URI'].split('?', 1)
 
