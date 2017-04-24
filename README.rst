@@ -84,8 +84,8 @@ Downloading Certs
 
 The CA cert can be downloaded directly from the proxy directly. This allows for quick installation into a client/browser.
 
- - ``curl -x "localhost:8080" http://wsgiprox/download/pem`` will download in PEM format (for most platforms)
- - ``curl -x "localhost:8080" http://wsgiprox/download/p12`` will download in PKCS12 format (for Windows)
+* ``curl -x "localhost:8080" http://wsgiprox/download/pem`` will download in PEM format (for most platforms)
+* ``curl -x "localhost:8080" http://wsgiprox/download/p12`` will download in PKCS12 format (for Windows)
 
 The download host is the same as proxy main host, though can be changed via ``download_host`` param to WSGIProxMiddleware constructor.
 
@@ -94,8 +94,8 @@ Custom Proxy Host Apps
 
 It's is also possible to configure a custom WSGI app per proxy host, eg:
 
- - ``curl -x "localhost:8080" https://proxy-app-1/path/`` is passed to ``proxy-app-1``
- - ``curl -x "localhost:8080" https://proxy-app-2/foo`` is passed to ``proxy-app-2``
+* ``curl -x "localhost:8080" https://proxy-app-1/path/`` is passed to ``proxy-app-1``
+* ``curl -x "localhost:8080" https://proxy-app-2/foo`` is passed to ``proxy-app-2``
  
 This can be done via:
 
@@ -138,9 +138,10 @@ How it Works / A note about WSGI
 =================================
 
 ``wsgiprox`` supports several different proxying methods:
-  - HTTP direct proxy, no tunnel
-  - HTTP CONNECT tunnel for websockets, no SSL
-  - HTTP CONNECT tunnel with SSL (also supports websockets)
+
+* HTTP direct proxy, no tunnel
+* HTTP CONNECT tunnel for websockets, no SSL
+* HTTP CONNECT tunnel with SSL (also supports websockets)
   
 For regular HTTP proxy, wsgiprox simply rewrites a host-qualifed request such as ``GET http://example.com/``, and passes it along to underlying WSGI app.
 
@@ -155,11 +156,11 @@ There is also support for gunicorn and wsgiref, as they provide a way to access 
 It may be possible to extend support to additional WSGI servers by extending ``WSGIProxMiddleware.get_raw_socket()`` to be able to find the underlying socket.
 
 Inspiration
-===========
+~~~~~~~~~~~
 
-This project draws on a lot of previous attempts.
+This project draws inspiration from a lot of previous efforts.
 
-Much of the functionality is a refactoring and cleanup of the proxy handling in `pywb <https://github.com/ikreymer/pywb>`_, which is built on top of standalone CA handling library `certauth <https://github.com/ikreymer/certauth>`_.
+Much of the functionality is a refactoring and spin-off of the proxy functionality in `pywb <https://github.com/ikreymer/pywb>`_, which is built on top of standalone CA handling library `certauth <https://github.com/ikreymer/certauth>`_.
 
 certauth was refactored from an earlier implementation in `warcprox <https://github.com/internetarchive/warcprox>`_ (which also inspired this name!).
 
