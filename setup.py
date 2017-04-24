@@ -46,6 +46,7 @@ setup(
     cmdclass={'test': PyTest},
     test_suite='',
     tests_require=[
+        'mock',
         'pytest',
         'pytest-cov',
         'gevent',

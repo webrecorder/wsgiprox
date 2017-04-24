@@ -2,6 +2,7 @@ import socket
 import ssl
 
 from six.moves.urllib.parse import quote, urlsplit
+from tempfile import SpooledTemporaryFile
 
 import six
 import os
@@ -50,7 +51,8 @@ class ConnectHandler(object):
 
         self.reader = curr_sock.makefile('rb', -1)
 
-        self.is_chunked = False
+        self._chunk = False
+        self._buffer = False
         self.headers_finished = False
 
     def write(self, data):
@@ -76,19 +78,26 @@ class ConnectHandler(object):
             self.curr_sock.send(line.encode('iso-8859-1'))
 
         if not found_cl:
-            self.curr_sock.send(b'Transfer-Encoding: chunked\r\n')
-            self.is_chunked = True
+            if self.environ.get('SERVER_PROTOCOL') == 'HTTP/1.1':
+                self.curr_sock.send(b'Transfer-Encoding: chunked\r\n')
+                self._chunk = True
+            else:
+                self._buffer = True
 
         return self.write
 
     def finish_response(self, raw_sock):
         resp_iter = self.wsgi(self.environ, self.start_response)
 
+        if self._chunk:
+            resp_iter = self.chunk_encode(resp_iter)
+
+        elif self._buffer and not self.headers_finished:
+            cl, resp_iter = self.buffer_iter(resp_iter)
+            self.curr_sock.send(b'Content-Length: ' + cl.encode() + b'\r\n')
+
         # finish headers after wsgi call
         self.finish_headers()
-
-        if self.is_chunked:
-            resp_iter = self.chunk_encode(resp_iter)
 
         for obj in resp_iter:
             if obj:
@@ -124,6 +133,27 @@ class ConnectHandler(object):
                 yield b'\r\n'
 
         yield b'0\r\n\r\n'
+
+    @classmethod
+    def buffer_iter(cls, orig_iter, buff_size=65536):
+        out = SpooledTemporaryFile(buff_size)
+        size = 0
+
+        for buff in orig_iter:
+            size += len(buff)
+            out.write(buff)
+
+        content_length_str = str(size)
+        out.seek(0)
+
+        def read_iter():
+            while True:
+                buff = out.read(buff_size)
+                if not buff:
+                    break
+                yield buff
+
+        return content_length_str, read_iter()
 
 
 # ============================================================================

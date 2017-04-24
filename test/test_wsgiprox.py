@@ -10,6 +10,8 @@ import pytest
 from wsgiprox.wsgiprox import WSGIProxMiddleware
 from wsgiprox.resolvers import FixedResolver, ProxyAuthResolver
 
+from mock import patch
+
 import shutil
 import six
 import os
@@ -55,6 +57,7 @@ class TestWSGIProx(object):
                            proxies=self.proxies,
                            verify=self.app.root_ca_file)
 
+        assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar'.format(scheme))
 
     @pytest.mark.parametrize("scheme", ['http', 'https'])
@@ -63,6 +66,24 @@ class TestWSGIProx(object):
                            proxies=self.proxies,
                            verify=self.app.root_ca_file)
 
+        assert(res.headers['Transfer-Encoding'] == 'chunked')
+        assert(res.headers.get('Content-Length') == None)
+        assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
+
+    @pytest.mark.parametrize("scheme", ['http', 'https'])
+    @patch('six.moves.http_client.HTTPConnection._http_vsn', 10)
+    @patch('six.moves.http_client.HTTPConnection._http_vsn_str', 'HTTP/1.0')
+    def test_chunked_force_http10_buffer(self, scheme):
+        res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
+                           proxies=self.proxies,
+                           verify=self.app.root_ca_file)
+
+        assert(res.headers.get('Transfer-Encoding') == None)
+
+        # https, must buffer and set content-length to avoid breaking CONNECT envelope
+        # for http, up-to wsgi server if buffering
+        if scheme == 'https':
+            assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
 
     @pytest.mark.parametrize("scheme", ['http', 'https'])
