@@ -65,7 +65,8 @@ class ConnectHandler(object):
             self.headers_finished = True
 
     def start_response(self, statusline, headers, exc_info=None):
-        status_line = 'HTTP/1.1 ' + statusline + '\r\n'
+        protocol = self.environ.get('SERVER_PROTOCOL', 'HTTP/1.0')
+        status_line = protocol + ' ' + statusline + '\r\n'
         self.curr_sock.send(status_line.encode('iso-8859-1'))
 
         found_cl = False
@@ -78,7 +79,7 @@ class ConnectHandler(object):
             self.curr_sock.send(line.encode('iso-8859-1'))
 
         if not found_cl:
-            if self.environ.get('SERVER_PROTOCOL') == 'HTTP/1.1':
+            if protocol == 'HTTP/1.1':
                 self.curr_sock.send(b'Transfer-Encoding: chunked\r\n')
                 self._chunk = True
             else:
