@@ -24,22 +24,22 @@ With the above configuration, the middleware is configured to add a prefix of ``
 
 *  Proxy Request: ``curl -x "localhost:8080" "http://example.com/path/file.html?A=B"``
 
-   Translated to: ``curl "http://localhost:8080/prefix/http://example.com/path/file.html?A=B"``
+   Becomes equivalent to: ``curl "http://localhost:8080/prefix/http://example.com/path/file.html?A=B"``
    
    
 *  Proxy Request: ``curl -k -x "localhost:8080" "https://example.com/path/file.html?A=B"``
 
-   Translated to: ``curl "http://localhost:8080/prefix/https://example.com/path/file.html?A=B"``
+   Becomes equivalent to: ``curl "http://localhost:8080/prefix/https://example.com/path/file.html?A=B"``
    
 *  Proxy Request to proxy host: ``curl -k -x "localhost:8080" "https://wsgiprox/path/file.html?A=B"``
 
-   Ignoring prefix for proxy host: ``curl "http://localhost:8080/path/file.html?A=B"``
+   Not adding prefix for ``wsgiprox``, becomes equivalent to: ``curl -H "Host: wsgiprox" "http://localhost:8080/path/file.html?A=B"``
    
 
 All standard WSGI ``environ`` fields are set to the expected values for the translated url.
 
 When a request passes through wsgiprox middleware, ``environ['wsgiprox.proxy_host']`` is set to the proxy host.
-In this example, the WSGI app could check that ``environ.get('wsgiprox.proxy_host') == 'wsgiprox'`` to ensure that it was a proxy request.
+In this example, the WSGI app could check that ``environ.get('wsgiprox.proxy_host') == 'wsgiprox'`` to ensure that it was a proxy request. If the request is to the proxy host itself, then it is passed to the WSGI app without prefixing, and ``environ['wsgiprox.proxy_host'] == environ['HTTP_HOST']``
 
 
 Custom Resolvers
@@ -53,11 +53,11 @@ For example, the following Resolver translates the url to a custom prefix based 
 
 .. code:: python
 
-  class Resolver(object):
+  class IPResolver(object):
       def __call__(self, url, environ):
-          return '/' + environ['REMOTE_ADDR'] + url
+          return '/' + environ['REMOTE_ADDR'] + '/' + url
        
-  application = WSGIProxMiddleware(application, Resolver())
+  application = WSGIProxMiddleware(application, IPResolver())
       
 
 HTTPS CA
