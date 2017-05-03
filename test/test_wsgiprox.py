@@ -22,6 +22,17 @@ from io import BytesIO
 
 
 # ============================================================================
+@pytest.fixture(params=['http', 'https'])
+def scheme(request):
+    return request.param
+
+
+@pytest.fixture(params=['ws', 'wss'])
+def ws_scheme(request):
+    return request.param
+
+
+# ============================================================================
 class TestWSGIProx(object):
     @classmethod
     def setup_class(cls):
@@ -55,7 +66,6 @@ class TestWSGIProx(object):
                 'https': 'https://{0}:{1}'.format(host, port)
                }
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_non_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
@@ -64,7 +74,6 @@ class TestWSGIProx(object):
         assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
                            proxies=self.proxies,
@@ -74,7 +83,6 @@ class TestWSGIProx(object):
         assert(res.headers.get('Content-Length') == None)
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     @patch('six.moves.http_client.HTTPConnection._http_vsn', 10)
     @patch('six.moves.http_client.HTTPConnection._http_vsn_str', 'HTTP/1.0')
     def test_chunked_force_http10_buffer(self, scheme):
@@ -90,7 +98,6 @@ class TestWSGIProx(object):
             assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_write_callable(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&write=true'.format(scheme),
                            proxies=self.proxies,
@@ -98,7 +105,6 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&write=true'.format(scheme))
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_post(self, scheme):
         res = requests.post('{0}://example.com/path/post'.format(scheme), data=BytesIO(b'ABC=1&xyz=2'),
                             proxies=self.proxies,
@@ -106,7 +112,6 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/post Post Data: ABC=1&xyz=2'.format(scheme))
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_fixed_host(self, scheme):
         res = requests.get('{0}://wsgiprox/path/file?foo=bar'.format(scheme),
                            proxies=self.proxies,
@@ -114,7 +119,6 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_alt_host(self, scheme):
         res = requests.get('{0}://proxy-alias/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
@@ -122,7 +126,6 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Requested Url: /path/file?foo=bar&addproxyhost=true Proxy Host: proxy-alias')
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_proxy_app(self, scheme):
         res = requests.get('{0}://proxy-app-1/path/file'.format(scheme),
                            proxies=self.proxies,
@@ -130,7 +133,6 @@ class TestWSGIProx(object):
 
         assert(res.text == 'Custom App: proxy-app-1 req to /path/file')
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_download_pem(self, scheme):
         res = requests.get('{0}://wsgiprox/download/pem'.format(scheme),
                            proxies=self.proxies,
@@ -138,7 +140,6 @@ class TestWSGIProx(object):
 
         assert res.headers['content-type'] == 'application/x-x509-ca-cert'
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_download_pkcs12(self, scheme):
         res = requests.get('{0}://wsgiprox/download/p12'.format(scheme),
                            proxies=self.proxies,
@@ -146,8 +147,8 @@ class TestWSGIProx(object):
 
         assert res.headers['content-type'] == 'application/x-pkcs12'
 
-    @pytest.mark.parametrize("scheme, ws_scheme", [('http', 'ws'), ('https', 'wss')])
-    def test_websocket(self, scheme, ws_scheme):
+    def test_websocket(self, ws_scheme):
+        scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
         ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
@@ -159,8 +160,8 @@ class TestWSGIProx(object):
         msg = ws.recv()
         assert(msg == 'WS Request Url: /prefix/{0}://example.com/websocket?a=b Echo: {1} message'.format(scheme, ws_scheme))
 
-    @pytest.mark.parametrize("scheme, ws_scheme", [('http', 'ws'), ('https', 'wss')])
-    def test_websocket_fixed_host(self, scheme, ws_scheme):
+    def test_websocket_fixed_host(self, ws_scheme):
+        scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
         ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
@@ -172,8 +173,8 @@ class TestWSGIProx(object):
         msg = ws.recv()
         assert(msg == 'WS Request Url: /websocket?a=b Echo: {1} message'.format(scheme, ws_scheme))
 
-    @pytest.mark.parametrize("scheme, ws_scheme", [('http', 'ws'), ('https', 'wss')])
-    def test_error_websocket_ignored(self, scheme, ws_scheme):
+    def test_error_websocket_ignored(self, ws_scheme):
+        scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
         ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
@@ -186,7 +187,6 @@ class TestWSGIProx(object):
         with pytest.raises(Exception):
             msg = ws.recv()
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_proxy_auth_required(self, scheme):
         self.app.prefix_resolver = self.auth_resolver
 
@@ -198,7 +198,6 @@ class TestWSGIProx(object):
 
         assert '407 ' in str(err.value)
 
-    @pytest.mark.parametrize("scheme", ['http', 'https'])
     def test_proxy_auth_success(self, scheme):
         self.app.prefix_resolver = self.auth_resolver
 

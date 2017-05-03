@@ -170,6 +170,9 @@ class WSGIProxMiddleware(object):
     CA_ROOT_FILE = 'wsgiprox-ca.pem'
     CA_CERTS_DIR = 'certs'
 
+    FILTER_REQ_HEADERS = ('HTTP_PROXY_CONNECTION',
+                          'HTTP_PROXY_AUTHORIZATION')
+
     def __init__(self, wsgi,
                  prefix_resolver=None,
                  download_host=None,
@@ -360,6 +363,10 @@ class WSGIProxMiddleware(object):
 
         self.resolve(full_uri, env, parts.netloc)
 
+        for header in list(env.keys()):
+            if header in self.FILTER_REQ_HEADERS:
+                env.pop(header, '')
+
     def conv_connect_env(self, env, reader, scheme):
         statusline = reader.readline().rstrip()
 
@@ -407,7 +414,8 @@ class WSGIProxMiddleware(object):
             if name not in ('CONTENT_LENGTH', 'CONTENT_TYPE'):
                 name = 'HTTP_' + name
 
-            env[name] = value
+            if name not in self.FILTER_REQ_HEADERS:
+                env[name] = value
 
         env['wsgi.input'] = reader
 

@@ -19,7 +19,7 @@ class PyTest(TestCommand):
 
 setup(
     name='wsgiprox',
-    version='1.2.1',
+    version='1.2.2',
     author='Ilya Kreymer',
     author_email='ikreymer@gmail.com',
     license='Apache 2.0',
