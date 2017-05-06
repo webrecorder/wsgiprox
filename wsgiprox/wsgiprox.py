@@ -8,6 +8,7 @@ from tempfile import SpooledTemporaryFile
 
 import six
 import os
+import time
 
 from certauth.certauth import CertificateAuthority
 
@@ -43,19 +44,61 @@ class WrappedWebSockHandler(WebSocketHandler):
         return self._logger
 
 
+# ============================================================================
+class BaseHandler(object):
+    FILTER_REQ_HEADERS = ('HTTP_PROXY_CONNECTION',
+                          'HTTP_PROXY_AUTHORIZATION')
+
+    @classmethod
+    def chunk_encode(cls, orig_iter):
+        for chunk in orig_iter:
+            chunk_len = len(chunk)
+            if chunk_len:
+                yield ('%X\r\n' % chunk_len).encode()
+                yield chunk
+                yield b'\r\n'
+
+        yield b'0\r\n\r\n'
+
+    @classmethod
+    def buffer_iter(cls, orig_iter, buff_size=65536):
+        out = SpooledTemporaryFile(buff_size)
+        size = 0
+
+        for buff in orig_iter:
+            size += len(buff)
+            out.write(buff)
+
+        content_length_str = str(size)
+        out.seek(0)
+
+        def read_iter():
+            while True:
+                buff = out.read(buff_size)
+                if not buff:
+                    break
+                yield buff
+
+        return content_length_str, read_iter()
+
 
 # ============================================================================
-class ConnectHandler(object):
-    def __init__(self, curr_sock, environ, wsgi):
+class ConnectHandler(BaseHandler):
+    def __init__(self, curr_sock, environ, scheme, wsgi, resolve):
         self.curr_sock = curr_sock
         self.environ = environ
+        self.scheme = scheme
+
         self.wsgi = wsgi
+        self.resolve = resolve
 
         self.reader = curr_sock.makefile('rb', -1)
 
         self._chunk = False
         self._buffer = False
         self.headers_finished = False
+
+        self.convert_env()
 
     def write(self, data):
         self.finish_headers()
@@ -106,9 +149,8 @@ class ConnectHandler(object):
             if obj:
                 self.curr_sock.send(obj)
 
+    def close(self):
         self.reader.close()
-        if self.curr_sock != raw_sock:
-            self.curr_sock.close()
 
     def handle_ws(self):
         ws = WrappedWebSockHandler(self)
@@ -126,37 +168,109 @@ class ConnectHandler(object):
 
         self.wsgi(self.environ, ignore_sr)
 
-    @classmethod
-    def chunk_encode(cls, orig_iter):
-        for chunk in orig_iter:
-            chunk_len = len(chunk)
-            if chunk_len:
-                yield ('%X\r\n' % chunk_len).encode()
-                yield chunk
-                yield b'\r\n'
+    def convert_env(self):
+        statusline = self.reader.readline().rstrip()
 
-        yield b'0\r\n\r\n'
+        if not statusline:
+            statusline = self.reader.readline().rstrip()
 
-    @classmethod
-    def buffer_iter(cls, orig_iter, buff_size=65536):
-        out = SpooledTemporaryFile(buff_size)
-        size = 0
+        if six.PY3:  #pragma: no cover
+            statusline = statusline.decode('iso-8859-1')
 
-        for buff in orig_iter:
-            size += len(buff)
-            out.write(buff)
+        statusparts = statusline.split(' ', 2)
+        hostname = self.environ['wsgiprox.connect_host']
 
-        content_length_str = str(size)
-        out.seek(0)
+        if len(statusparts) < 3:
+            raise Exception('Invalid Proxy Request: ' + statusline + ' from ' + hostname)
 
-        def read_iter():
-            while True:
-                buff = out.read(buff_size)
-                if not buff:
-                    break
-                yield buff
+        self.environ['wsgi.url_scheme'] = self.scheme
 
-        return content_length_str, read_iter()
+        self.environ['REQUEST_METHOD'] = statusparts[0]
+
+        self.environ['SERVER_PROTOCOL'] = statusparts[2].strip()
+
+        full_uri = self.scheme + '://' + hostname + statusparts[1]
+
+        self.resolve(full_uri, self.environ, hostname)
+
+        while True:
+            line = self.reader.readline()
+            if line:
+                line = line.rstrip()
+                if six.PY3:  #pragma: no cover
+                    line = line.decode('iso-8859-1')
+
+            if not line:
+                break
+
+            parts = line.split(':', 1)
+            if len(parts) < 2:
+                continue
+
+            name = parts[0].strip()
+            value = parts[1].strip()
+
+            name = name.replace('-', '_').upper()
+
+            if name not in ('CONTENT_LENGTH', 'CONTENT_TYPE'):
+                name = 'HTTP_' + name
+
+            if name not in self.FILTER_REQ_HEADERS:
+                self.environ[name] = value
+
+        self.environ['wsgi.input'] = self.reader
+
+
+# ============================================================================
+class HttpProxyHandler(BaseHandler):
+    PROXY_CONN_CLOSE = ('Proxy-Connection', 'close')
+
+    def __init__(self, environ, start_response, wsgi, resolve):
+        self.environ = environ
+        self.statusline = None
+        self.headers = None
+
+        self.real_start_response = start_response
+
+        self.wsgi = wsgi
+        self.resolve = resolve
+
+        self.convert_env()
+
+    def convert_env(self):
+        full_uri = self.environ['REQUEST_URI']
+
+        parts = urlsplit(full_uri)
+
+        self.resolve(full_uri, self.environ, parts.netloc.split(':')[0])
+
+        for header in list(self.environ.keys()):
+            if header in self.FILTER_REQ_HEADERS:
+                self.environ.pop(header, '')
+
+    def start_response(self, statusline, headers, exc_info=None):
+        self.statusline = statusline
+        self.headers = headers
+
+        index = 0
+        conn_index = -1
+
+        #for name, value in self.headers:
+        #    if name.lower() == 'connection':
+        #        conn_index = index
+        #        break
+
+        #    index += 1
+
+        if conn_index < 0:
+            self.headers.append(self.PROXY_CONN_CLOSE)
+        else:
+            self.headers[conn_index] = self.PROXY_CONN_CLOSE
+
+        return self.real_start_response(self.statusline, self.headers, exc_info)
+
+    def __call__(self):
+        return self.wsgi(self.environ, self.start_response)
 
 
 # ============================================================================
@@ -169,9 +283,6 @@ class WSGIProxMiddleware(object):
 
     CA_ROOT_FILE = 'wsgiprox-ca.pem'
     CA_CERTS_DIR = 'certs'
-
-    FILTER_REQ_HEADERS = ('HTTP_PROXY_CONNECTION',
-                          'HTTP_PROXY_AUTHORIZATION')
 
     def __init__(self, wsgi,
                  prefix_resolver=None,
@@ -211,7 +322,8 @@ class WSGIProxMiddleware(object):
 
         self.ca = CertificateAuthority(ca_file=ca_file,
                                        certs_dir=certs_dir,
-                                       ca_name=ca_name)
+                                       ca_name=ca_name,
+                                       cert_start=-3600)
 
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
@@ -249,13 +361,17 @@ class WSGIProxMiddleware(object):
             self.ensure_request_uri(env)
 
             if env['REQUEST_URI'].startswith('http://'):
-                res = self.require_auth(env, start_response)
-                if res is not None:
-                    return res
+                return self.handle_http_proxy(env, start_response)
+            else:
+                return self.wsgi(env, start_response)
 
-                self.conv_http_env(env)
+    def handle_http_proxy(self, env, start_response):
+        res = self.require_auth(env, start_response)
+        if res is not None:
+            return res
 
-            return self.wsgi(env, start_response)
+        handler = HttpProxyHandler(env, start_response, self.wsgi, self.resolve)
+        return handler()
 
     def handle_connect(self, env, start_response):
         raw_sock = self.get_raw_socket(env)
@@ -268,44 +384,84 @@ class WSGIProxMiddleware(object):
         if res is not None:
             return res
 
-        scheme, curr_sock = self.wrap_socket(env['PATH_INFO'], raw_sock)
+        connect_handler = None
+        curr_sock = None
 
-        connect_handler = ConnectHandler(curr_sock, env, self.wsgi)
+        try:
+            scheme, curr_sock = self.wrap_socket(env, raw_sock)
 
-        self.conv_connect_env(env, connect_handler.reader, scheme)
+            connect_handler = ConnectHandler(curr_sock, env, scheme,
+                                             self.wsgi, self.resolve)
 
-        # check for websocket upgrade, if enabled
-        if self.enable_ws and env.get('HTTP_UPGRADE', '') == 'websocket':
-            connect_handler.handle_ws()
-        else:
-            connect_handler.finish_response(raw_sock)
+            # check for websocket upgrade, if enabled
+            if self.enable_ws and env.get('HTTP_UPGRADE', '') == 'websocket':
+                connect_handler.handle_ws()
+            else:
+                connect_handler.finish_response(raw_sock)
+
+        except:
+            import traceback
+            traceback.print_exc()
+
+            start_response('500 Unexpected Error',
+                           [('Content-Length', '0')])
+
+
+        finally:
+            if connect_handler:
+                connect_handler.close()
+
+            if curr_sock and curr_sock != raw_sock:
+                curr_sock.close()
 
         return []
 
-    def wrap_socket(self, host_port, sock):
-        #sock.send(b'HTTP/1.1 200 Connection Established\r\n')
-        #sock.send(b'Proxy-Connection: keep-alive\r\n')
-        sock.send(b'HTTP/1.0 200 Connection Established\r\n')
-        sock.send(b'Proxy-Connection: close\r\n')
-        sock.send(b'Server: wsgiprox\r\n')
-        sock.send(b'\r\n')
+    def _new_context(self):
+        context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
+        #context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+        #context.set_npn_protocols(['http/1.1'])
+        return context
 
-        hostname, port = host_port.split(':')
-
-        if port == '80':
-            return 'http', sock
-
+    def create_ssl_context(self, hostname):
         if not self.use_wildcard:
             certfile = self.ca.cert_for_host(hostname)
         else:
             certfile = self.ca.get_wildcard_cert(hostname)
 
-        ssl_sock = ssl.wrap_socket(sock,
-                                   server_side=True,
-                                   certfile=certfile,
-                                   suppress_ragged_eofs=False,
-                                   ssl_version=ssl.PROTOCOL_SSLv23
-                                   )
+        context = self._new_context()
+        context.load_cert_chain(certfile)
+        return context
+
+    def wrap_socket(self, env, sock):
+        host_port = env['PATH_INFO']
+        hostname, port = host_port.split(':', 1)
+        env['wsgiprox.connect_host'] = hostname
+
+        sock.send(b'HTTP/1.0 200 Connection Established\r\n')
+        sock.send(b'Proxy-Connection: close\r\n')
+        sock.send(b'Server: wsgiprox\r\n')
+        sock.send(b'\r\n')
+
+        if port == '80':
+            return 'http', sock
+
+        def sni_callback(sock, sni_hostname, orig_context):
+            sock.context = self.create_ssl_context(sni_hostname)
+            env['wsgiprox.connect_host'] = sni_hostname
+
+        if hasattr(ssl.SSLContext, 'set_servername_callback'):
+            context = self._new_context()
+            context.set_servername_callback(sni_callback)
+        else:
+            context = self._create_ssl_context(hostname)
+
+        ssl_sock = context.wrap_socket(sock,
+                                       server_side=True,
+                                       suppress_ragged_eofs=False,
+                                       do_handshake_on_connect=False,
+                                      )
+
+        ssl_sock.do_handshake()
 
         return 'https', ssl_sock
 
@@ -325,8 +481,7 @@ class WSGIProxMiddleware(object):
         start_response('407 Proxy Authentication', headers)
         return []
 
-    def resolve(self, url, env, host_port):
-        hostname = host_port.split(':')[0]
+    def resolve(self, url, env, hostname):
         if hostname in self.proxy_apps.keys():
             parts = urlsplit(url)
             full = parts.path
@@ -355,69 +510,6 @@ class WSGIProxMiddleware(object):
             full_uri += '?' + env['QUERY_STRING']
 
         env['REQUEST_URI'] = full_uri
-
-    def conv_http_env(self, env):
-        full_uri = env['REQUEST_URI']
-
-        parts = urlsplit(full_uri)
-
-        self.resolve(full_uri, env, parts.netloc)
-
-        for header in list(env.keys()):
-            if header in self.FILTER_REQ_HEADERS:
-                env.pop(header, '')
-
-    def conv_connect_env(self, env, reader, scheme):
-        statusline = reader.readline().rstrip()
-
-        if six.PY3:  #pragma: no cover
-            statusline = statusline.decode('iso-8859-1')
-
-        statusparts = statusline.split(' ', 2)
-
-        if len(statusparts) < 3:
-            raise Exception('Invalid Proxy Request: ' + statusline)
-
-        hostname, port = env['PATH_INFO'].split(':', 1)
-
-        env['wsgi.url_scheme'] = scheme
-
-        host_port = env['PATH_INFO']
-
-        env['REQUEST_METHOD'] = statusparts[0]
-
-        env['SERVER_PROTOCOL'] = statusparts[2].strip()
-
-        full_uri = scheme + '://' + hostname + statusparts[1]
-
-        self.resolve(full_uri, env, host_port)
-
-        while True:
-            line = reader.readline()
-            if line:
-                line = line.rstrip()
-                if six.PY3:  #pragma: no cover
-                    line = line.decode('iso-8859-1')
-
-            if not line:
-                break
-
-            parts = line.split(':', 1)
-            if len(parts) < 2:
-                continue
-
-            name = parts[0].strip()
-            value = parts[1].strip()
-
-            name = name.replace('-', '_').upper()
-
-            if name not in ('CONTENT_LENGTH', 'CONTENT_TYPE'):
-                name = 'HTTP_' + name
-
-            if name not in self.FILTER_REQ_HEADERS:
-                env[name] = value
-
-        env['wsgi.input'] = reader
 
     @classmethod
     def get_raw_socket(cls, env):  #pragma: no cover
@@ -474,6 +566,8 @@ class CertDownloader(object):
                 buff = fh.read()
 
             content_type = 'application/x-x509-ca-cert'
+
+            #buff = buff.split(b'-----END PRIVATE KEY-----')[-1].lstrip()
 
         elif path == self.DL_P12:
             buff = self.ca.get_root_PKCS12()
