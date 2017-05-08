@@ -3,6 +3,9 @@ from gevent.pywsgi import WSGIServer
 
 import gevent
 
+import ssl
+import sys
+
 import requests
 import websocket
 import pytest
@@ -16,7 +19,9 @@ import shutil
 import six
 import os
 import tempfile
+
 from six.moves.urllib.parse import parse_qsl
+from six.moves.http_client import HTTPSConnection, HTTPConnection
 
 from io import BytesIO
 
@@ -30,6 +35,17 @@ def scheme(request):
 @pytest.fixture(params=['ws', 'wss'])
 def ws_scheme(request):
     return request.param
+
+
+# ============================================================================
+class SNIHTTPSConnection(HTTPSConnection):
+    def connect(self):
+        HTTPConnection.connect(self)
+
+        server_hostname = self._server_hostname
+
+        self.sock = self._context.wrap_socket(self.sock,
+                                              server_hostname=self._server_hostname)
 
 
 # ============================================================================
@@ -73,6 +89,37 @@ class TestWSGIProx(object):
 
         assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
+
+    @pytest.mark.skipif(sys.version_info > (2,7) and sys.version_info < (3,4),
+                        reason='Not supported in py3.3')
+    def test_with_sni(self):
+        conn = SNIHTTPSConnection('localhost', self.port, context=ssl.create_default_context(cafile=self.app.root_ca_file))
+        # set CONNECT host:port
+        conn.set_tunnel('93.184.216.34', 443)
+        # set actual hostname
+        conn._server_hostname = 'example.com'
+        conn.request('GET', '/path/file?foo=bar&addproxyhost=true')
+        res = conn.getresponse()
+        text = res.read().decode('utf-8')
+        conn.close()
+
+        assert(res.getheader('Content-Length') != '')
+        assert(text == 'Requested Url: /prefix/https://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox')
+
+
+        conn = SNIHTTPSConnection('localhost', self.port,
+                                  context=ssl.create_default_context(cafile=self.app.root_ca_file))
+        # set CONNECT host:port
+        conn.set_tunnel('93.184.216.34', 443)
+        # set actual hostname
+        conn._server_hostname = 'example.com'
+        conn.request('GET', '/path/file?foo=bar&addproxyhost=true')
+        res = conn.getresponse()
+        text = res.read().decode('utf-8')
+        conn.close()
+
+        assert(res.getheader('Content-Length') != '')
+        assert(text == 'Requested Url: /prefix/https://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox')
 
     def test_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),

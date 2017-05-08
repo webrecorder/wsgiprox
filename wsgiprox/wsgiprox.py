@@ -227,8 +227,6 @@ class HttpProxyHandler(BaseHandler):
 
     def __init__(self, environ, start_response, wsgi, resolve):
         self.environ = environ
-        self.statusline = None
-        self.headers = None
 
         self.real_start_response = start_response
 
@@ -249,25 +247,9 @@ class HttpProxyHandler(BaseHandler):
                 self.environ.pop(header, '')
 
     def start_response(self, statusline, headers, exc_info=None):
-        self.statusline = statusline
-        self.headers = headers
+        headers.append(self.PROXY_CONN_CLOSE)
 
-        index = 0
-        conn_index = -1
-
-        #for name, value in self.headers:
-        #    if name.lower() == 'connection':
-        #        conn_index = index
-        #        break
-
-        #    index += 1
-
-        if conn_index < 0:
-            self.headers.append(self.PROXY_CONN_CLOSE)
-        else:
-            self.headers[conn_index] = self.PROXY_CONN_CLOSE
-
-        return self.real_start_response(self.statusline, self.headers, exc_info)
+        return self.real_start_response(statusline, headers, exc_info)
 
     def __call__(self):
         return self.wsgi(self.environ, self.start_response)
@@ -301,6 +283,9 @@ class WSGIProxMiddleware(object):
         self.proxy_apps = proxy_apps or {}
 
         self.proxy_host = proxy_host or self.DEFAULT_HOST
+
+        self.has_sni = hasattr(ssl, 'HAS_SNI') and ssl.HAS_SNI
+        self.has_alpn = hasattr(ssl, 'HAS_ALPN') and ssl.HAS_ALPN
 
         if self.proxy_host not in self.proxy_apps:
             self.proxy_apps[self.proxy_host] = None
@@ -418,8 +403,8 @@ class WSGIProxMiddleware(object):
 
     def _new_context(self):
         context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
-        #context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-        #context.set_npn_protocols(['http/1.1'])
+        if self.has_alpn:
+            context.set_alpn_protocols(['http/1.1'])
         return context
 
     def create_ssl_context(self, hostname):
@@ -432,15 +417,20 @@ class WSGIProxMiddleware(object):
         context.load_cert_chain(certfile)
         return context
 
+    def _get_connect_response(self, env):
+        buff = b'\
+HTTP/1.0 200 Connection Established\r\n\
+Proxy-Connection: close\r\n\
+Server: wsgiprox\r\n\
+\r\n'
+        return buff
+
     def wrap_socket(self, env, sock):
         host_port = env['PATH_INFO']
         hostname, port = host_port.split(':', 1)
         env['wsgiprox.connect_host'] = hostname
 
-        sock.send(b'HTTP/1.0 200 Connection Established\r\n')
-        sock.send(b'Proxy-Connection: close\r\n')
-        sock.send(b'Server: wsgiprox\r\n')
-        sock.send(b'\r\n')
+        sock.send(self._get_connect_response(env))
 
         if port == '80':
             return 'http', sock
@@ -449,11 +439,11 @@ class WSGIProxMiddleware(object):
             sock.context = self.create_ssl_context(sni_hostname)
             env['wsgiprox.connect_host'] = sni_hostname
 
-        if hasattr(ssl.SSLContext, 'set_servername_callback'):
+        if self.has_sni:
             context = self._new_context()
             context.set_servername_callback(sni_callback)
         else:
-            context = self._create_ssl_context(hostname)
+            context = self.create_ssl_context(hostname)
 
         ssl_sock = context.wrap_socket(sock,
                                        server_side=True,
