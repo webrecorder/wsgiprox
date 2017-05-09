@@ -32,11 +32,8 @@ setup(
         ],
     install_requires=[
         'six',
-        'certauth',
+        'certauth>=1.1.5',
         ],
-    dependency_links=[
-        'git+https://github.com/ikreymer/certauth.git@customize-duration#egg=certauth-1.1.5',
-    ],
     zip_safe=True,
     data_files=[
     ],
