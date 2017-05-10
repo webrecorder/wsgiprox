@@ -399,6 +399,9 @@ class WSGIProxMiddleware(object):
             if curr_sock and curr_sock != raw_sock:
                 curr_sock.close()
 
+            if env.get('uwsgi.version'):
+                start_response('200 OK', [])
+
         return []
 
     def _new_context(self):
@@ -436,6 +439,7 @@ Server: wsgiprox\r\n\
             return 'http', sock
 
         def sni_callback(sock, sni_hostname, orig_context):
+            sni_hostname = sni_hostname or hostname
             sock.context = self.create_ssl_context(sni_hostname)
             env['wsgiprox.connect_host'] = sni_hostname
 
@@ -509,11 +513,7 @@ Server: wsgiprox\r\n\
             try:
                 import uwsgi
                 fd = uwsgi.connection_fd()
-                conn = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
-                try:
-                    sock = socket.socket(_sock=conn)
-                except:
-                    sock = conn
+                sock = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
             except Exception as e:
                 pass
         elif env.get('gunicorn.socket'):

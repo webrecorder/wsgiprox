@@ -9,9 +9,12 @@ import sys
 import requests
 import websocket
 import pytest
+import subprocess
 
 from wsgiprox.wsgiprox import WSGIProxMiddleware
 from wsgiprox.resolvers import FixedResolver, ProxyAuthResolver
+
+from .fixture_app import make_application
 
 from mock import patch
 
@@ -19,8 +22,8 @@ import shutil
 import six
 import os
 import tempfile
+import re
 
-from six.moves.urllib.parse import parse_qsl
 from six.moves.http_client import HTTPSConnection, HTTPConnection
 
 from io import BytesIO
@@ -38,39 +41,13 @@ def ws_scheme(request):
 
 
 # ============================================================================
-class SNIHTTPSConnection(HTTPSConnection):
-    def connect(self):
-        HTTPConnection.connect(self)
-
-        server_hostname = self._server_hostname
-
-        self.sock = self._context.wrap_socket(self.sock,
-                                              server_hostname=self._server_hostname)
-
-
-# ============================================================================
-class TestWSGIProx(object):
+class BaseWSGIProx(object):
     @classmethod
     def setup_class(cls):
         cls.test_ca_dir = tempfile.mkdtemp()
 
-        cls.app = WSGIProxMiddleware(TestWSGI(),
-                                     '/prefix/',
-                                     proxy_options={'ca_root_dir': cls.test_ca_dir},
-                                     proxy_apps={'proxy-alias': '',
-                                                 'proxy-app-1': CustomApp()
-                                                }
-                                    )
-
-        cls.auth_resolver = ProxyAuthResolver()
-
-        cls.server = WSGIServer(('localhost', 0), cls.app)
-        cls.server.init_socket()
-        cls.port = str(cls.server.address[1])
-
-        gevent.spawn(cls.server.serve_forever)
-
-        cls.proxies = cls.proxy_dict(cls.port)
+        cls.app = make_application(cls.test_ca_dir)
+        cls.root_ca_file = cls.app.root_ca_file
 
     @classmethod
     def teardown_class(cls):
@@ -85,15 +62,15 @@ class TestWSGIProx(object):
     def test_non_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
 
-    @pytest.mark.skipif(sys.version_info > (2,7) and sys.version_info < (3,4),
+    @pytest.mark.skipif(sys.version_info >= (3,0) and sys.version_info < (3,4),
                         reason='Not supported in py3.3')
     def test_with_sni(self):
-        conn = SNIHTTPSConnection('localhost', self.port, context=ssl.create_default_context(cafile=self.app.root_ca_file))
+        conn = SNIHTTPSConnection('localhost', self.port, context=ssl.create_default_context(cafile=self.root_ca_file))
         # set CONNECT host:port
         conn.set_tunnel('93.184.216.34', 443)
         # set actual hostname
@@ -108,7 +85,7 @@ class TestWSGIProx(object):
 
 
         conn = SNIHTTPSConnection('localhost', self.port,
-                                  context=ssl.create_default_context(cafile=self.app.root_ca_file))
+                                  context=ssl.create_default_context(cafile=self.root_ca_file))
         # set CONNECT host:port
         conn.set_tunnel('93.184.216.34', 443)
         # set actual hostname
@@ -124,9 +101,10 @@ class TestWSGIProx(object):
     def test_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
-        assert(res.headers['Transfer-Encoding'] == 'chunked')
+        if not (self.server_type == 'uwsgi' and scheme == 'http'):
+            assert(res.headers['Transfer-Encoding'] == 'chunked')
         assert(res.headers.get('Content-Length') == None)
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
 
@@ -135,7 +113,7 @@ class TestWSGIProx(object):
     def test_chunked_force_http10_buffer(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.headers.get('Transfer-Encoding') == None)
 
@@ -148,49 +126,49 @@ class TestWSGIProx(object):
     def test_write_callable(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&write=true'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&write=true'.format(scheme))
 
     def test_post(self, scheme):
         res = requests.post('{0}://example.com/path/post'.format(scheme), data=BytesIO(b'ABC=1&xyz=2'),
                             proxies=self.proxies,
-                            verify=self.app.root_ca_file)
+                            verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/post Post Data: ABC=1&xyz=2'.format(scheme))
 
     def test_fixed_host(self, scheme):
         res = requests.get('{0}://wsgiprox/path/file?foo=bar'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
     def test_alt_host(self, scheme):
         res = requests.get('{0}://proxy-alias/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar&addproxyhost=true Proxy Host: proxy-alias')
 
     def test_proxy_app(self, scheme):
         res = requests.get('{0}://proxy-app-1/path/file'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.text == 'Custom App: proxy-app-1 req to /path/file')
 
     def test_download_pem(self, scheme):
         res = requests.get('{0}://wsgiprox/download/pem'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert res.headers['content-type'] == 'application/x-x509-ca-cert'
 
     def test_download_pkcs12(self, scheme):
         res = requests.get('{0}://wsgiprox/download/p12'.format(scheme),
                            proxies=self.proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert res.headers['content-type'] == 'application/x-pkcs12'
 
@@ -198,7 +176,7 @@ class TestWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
+        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
         ws.connect('{0}://example.com/websocket?a=b'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
@@ -211,7 +189,7 @@ class TestWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
+        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
         ws.connect('{0}://wsgiprox/websocket?a=b'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
@@ -224,7 +202,7 @@ class TestWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.app.root_ca_file})
+        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
         ws.connect('{0}://wsgiprox/websocket?ignore_ws=true'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
@@ -233,6 +211,28 @@ class TestWSGIProx(object):
         ws.settimeout(0.2)
         with pytest.raises(Exception):
             msg = ws.recv()
+
+    def test_non_proxy_passthrough(self):
+        res = requests.get('http://localhost:' + str(self.port) + '/path/file?foo=bar')
+        assert(res.text == 'Requested Url: /path/file?foo=bar')
+
+
+# ============================================================================
+class Test_gevent_WSGIProx(BaseWSGIProx):
+    @classmethod
+    def setup_class(cls):
+        super(Test_gevent_WSGIProx, cls).setup_class()
+        cls.server = WSGIServer(('localhost', 0), cls.app)
+        cls.server.init_socket()
+        cls.port = str(cls.server.address[1])
+
+        gevent.spawn(cls.server.serve_forever)
+
+        cls.proxies = cls.proxy_dict(cls.port)
+
+        cls.auth_resolver = ProxyAuthResolver()
+
+        cls.server_type = 'gevent'
 
     def test_proxy_auth_required(self, scheme):
         self.app.prefix_resolver = self.auth_resolver
@@ -252,7 +252,7 @@ class TestWSGIProx(object):
 
         res = requests.get('{0}://example.com/path/file?foo=bar'.format(scheme),
                            proxies=proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /other-prefix/{0}://example.com/path/file?foo=bar'.format(scheme))
 
@@ -269,7 +269,7 @@ class TestWSGIProx(object):
         # http proxy not supported: just passes through
         res = requests.get('http://example.com/path/file?foo=bar',
                            proxies=proxies,
-                           verify=self.app.root_ca_file)
+                           verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
@@ -277,66 +277,61 @@ class TestWSGIProx(object):
         with pytest.raises(requests.exceptions.ProxyError) as err:
             res = requests.get('https://example.com/path/file?foo=bar',
                                proxies=proxies,
-                               verify=self.app.root_ca_file)
+                               verify=self.root_ca_file)
 
         assert '405 ' in str(err.value)
 
-    def test_non_proxy_passthrough(self):
-        res = requests.get('http://localhost:' + str(self.port) + '/path/file?foo=bar')
-        assert(res.text == 'Requested Url: /path/file?foo=bar')
+
+# ============================================================================
+@pytest.mark.skipif(sys.platform == 'win32', reason='no uwsgi on windows')
+
+class Test_uwsgi_WSGIProx(BaseWSGIProx):
+    @classmethod
+    def setup_class(cls):
+        super(Test_uwsgi_WSGIProx, cls).setup_class()
+
+        cls.root_ca_file = os.path.join(cls.test_ca_dir, 'ca', 'wsgiprox-ca.pem')
+
+        env = os.environ.copy()
+        env['CA_ROOT_DIR'] = cls.test_ca_dir
+
+        curr_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)))
+
+        try:
+            cls.uwsgi = subprocess.Popen(['uwsgi', 'uwsgi.ini'], env=env, cwd=curr_dir,
+                                         stderr=subprocess.PIPE)
+
+        except Exception as e:
+            pytest.skip('uwsgi not found, skipping uwsgi tests')
+
+        port_rx = re.compile('uwsgi socket 0 bound to TCP address :([\d]+)')
+
+        while True:
+            line = cls.uwsgi.stderr.readline().decode('utf-8')
+            m = port_rx.search(line)
+            if m:
+                cls.port = int(m.group(1))
+                break
+
+        cls.proxies = cls.proxy_dict(cls.port)
+
+        cls.server_type = 'uwsgi'
+
+    @classmethod
+    def teardown_class(cls):
+        cls.uwsgi.terminate()
+        super(Test_uwsgi_WSGIProx, cls).teardown_class()
+
 
 
 # ============================================================================
-class CustomApp(object):
-    def __call__(self, env, start_response):
-        result = 'Custom App: ' + env['wsgiprox.proxy_host'] + ' req to ' + env['PATH_INFO']
-        result = result.encode('iso-8859-1')
+class SNIHTTPSConnection(HTTPSConnection):
+    def connect(self):
+        HTTPConnection.connect(self)
 
-        headers = [('Content-Length', str(len(result)))]
+        server_hostname = self._server_hostname
 
-        start_response('200 OK', headers=headers)
-
-        return iter([result])
+        self.sock = self._context.wrap_socket(self.sock,
+                                              server_hostname=self._server_hostname)
 
 
-# ============================================================================
-class TestWSGI(object):
-    def __call__(self, env, start_response):
-        status = '200 OK'
-
-        params = dict(parse_qsl(env.get('QUERY_STRING')))
-
-        ws = env.get('wsgi.websocket')
-        if ws and not params.get('ignore_ws'):
-            msg = 'WS Request Url: ' + env.get('REQUEST_URI', '')
-            msg += ' Echo: ' + ws.receive()
-            ws.send(msg)
-            return []
-
-        result = 'Requested Url: ' + env.get('REQUEST_URI', '')
-        if env['REQUEST_METHOD'] == 'POST':
-            result += ' Post Data: ' + env['wsgi.input'].read(int(env['CONTENT_LENGTH'])).decode('utf-8')
-
-        if params.get('addproxyhost') == 'true':
-            result += ' Proxy Host: ' + env.get('wsgiprox.proxy_host', '')
-
-        result = result.encode('iso-8859-1')
-
-        if params.get('chunked') == 'true':
-            headers = []
-        else:
-            headers = [('Content-Length', str(len(result)))]
-
-        write = start_response(status, headers)
-
-        if params.get('write') == 'true':
-            write(result)
-            return iter([])
-        else:
-            return iter([result])
-
-
-# ============================================================================
-if __name__ == "__main__":
-    app = WSGIProxMiddleware(TestWSGI(), FixedResolver('/prefix/'))
-    WSGIServer(('localhost', 8080), app).serve_forever()
