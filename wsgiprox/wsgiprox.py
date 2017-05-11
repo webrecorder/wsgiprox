@@ -130,11 +130,8 @@ class ConnectHandler(BaseHandler):
         self.resolve = resolve
 
         reader = SocketReader(curr_sock)
-        self.writer = SocketWriter(curr_sock)
         self.reader = io.BufferedReader(reader, BUFF_SIZE)
-        #self.writer = io.BufferedWriter(writer, BUFF_SIZE)
-
-        #self.io = io.BufferedRWPair(reader, writer, BUFF_SIZE)
+        self.writer = SocketWriter(curr_sock)
 
         self._chunk = False
         self._buffer = False
@@ -149,7 +146,6 @@ class ConnectHandler(BaseHandler):
     def finish_headers(self):
         if not self.headers_finished:
             self.writer.write(b'\r\n')
-            self.writer.flush()
             self.headers_finished = True
 
     def start_response(self, statusline, headers, exc_info=None):
@@ -451,7 +447,10 @@ class WSGIProxMiddleware(object):
 
             if curr_sock and curr_sock != raw_sock:
                 curr_sock.shutdown()
-                curr_sock.sock_shutdown(socket.SHUT_RDWR)
+                try:
+                    curr_sock.sock_shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
                 curr_sock.close()
 
             if env.get('uwsgi.version'):
@@ -495,7 +494,7 @@ Server: wsgiprox\r\n\
 
         sock.sendall(self._get_connect_response(env))
 
-        if port == '80':
+        if port != '443':
             return 'http', sock
 
         def sni_callback(connection):
