@@ -284,7 +284,6 @@ class Test_gevent_WSGIProx(BaseWSGIProx):
 
 # ============================================================================
 @pytest.mark.skipif(sys.platform == 'win32', reason='no uwsgi on windows')
-
 class Test_uwsgi_WSGIProx(BaseWSGIProx):
     @classmethod
     def setup_class(cls):

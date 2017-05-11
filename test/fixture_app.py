@@ -1,4 +1,6 @@
 from gevent.monkey import patch_all; patch_all()
+import gevent_openssl; gevent_openssl.monkey_patch()
+
 from wsgiprox.wsgiprox import WSGIProxMiddleware
 from six.moves.urllib.parse import parse_qsl
 import os

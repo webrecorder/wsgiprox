@@ -9,8 +9,13 @@ from tempfile import SpooledTemporaryFile
 import six
 import os
 import time
+import io
 
 from certauth.certauth import CertificateAuthority
+
+import gevent_openssl; gevent_openssl.monkey_patch()
+
+from OpenSSL import SSL
 
 from wsgiprox.resolvers import FixedResolver
 
@@ -20,6 +25,8 @@ except:  #pragma: no cover
     WebSocketHandler = object
 
 import logging
+
+BUFF_SIZE = 16384
 
 
 # ============================================================================
@@ -83,6 +90,36 @@ class BaseHandler(object):
 
 
 # ============================================================================
+class SocketReader(io.BufferedIOBase):
+    def __init__(self, socket):
+        self.socket = socket
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+    def read(self, size):
+        return self.socket.recv(size)
+
+
+# ============================================================================
+class SocketWriter(io.BufferedIOBase):
+    def __init__(self, socket):
+        self.socket = socket
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+    def write(self, buff):
+        return self.socket.sendall(buff)
+
+
+# ============================================================================
 class ConnectHandler(BaseHandler):
     def __init__(self, curr_sock, environ, scheme, wsgi, resolve):
         self.curr_sock = curr_sock
@@ -92,7 +129,12 @@ class ConnectHandler(BaseHandler):
         self.wsgi = wsgi
         self.resolve = resolve
 
-        self.reader = curr_sock.makefile('rb', -1)
+        reader = SocketReader(curr_sock)
+        self.writer = SocketWriter(curr_sock)
+        self.reader = io.BufferedReader(reader, BUFF_SIZE)
+        #self.writer = io.BufferedWriter(writer, BUFF_SIZE)
+
+        #self.io = io.BufferedRWPair(reader, writer, BUFF_SIZE)
 
         self._chunk = False
         self._buffer = False
@@ -102,17 +144,18 @@ class ConnectHandler(BaseHandler):
 
     def write(self, data):
         self.finish_headers()
-        self.curr_sock.send(data)
+        self.writer.write(data)
 
     def finish_headers(self):
         if not self.headers_finished:
-            self.curr_sock.send(b'\r\n')
+            self.writer.write(b'\r\n')
+            self.writer.flush()
             self.headers_finished = True
 
     def start_response(self, statusline, headers, exc_info=None):
         protocol = self.environ.get('SERVER_PROTOCOL', 'HTTP/1.0')
         status_line = protocol + ' ' + statusline + '\r\n'
-        self.curr_sock.send(status_line.encode('iso-8859-1'))
+        self.writer.write(status_line.encode('iso-8859-1'))
 
         found_cl = False
 
@@ -121,11 +164,11 @@ class ConnectHandler(BaseHandler):
                 found_cl = True
 
             line = name + ': ' + value + '\r\n'
-            self.curr_sock.send(line.encode('iso-8859-1'))
+            self.writer.write(line.encode('iso-8859-1'))
 
         if not found_cl:
             if protocol == 'HTTP/1.1':
-                self.curr_sock.send(b'Transfer-Encoding: chunked\r\n')
+                self.writer.write(b'Transfer-Encoding: chunked\r\n')
                 self._chunk = True
             else:
                 self._buffer = True
@@ -140,17 +183,17 @@ class ConnectHandler(BaseHandler):
 
         elif self._buffer and not self.headers_finished:
             cl, resp_iter = self.buffer_iter(resp_iter)
-            self.curr_sock.send(b'Content-Length: ' + cl.encode() + b'\r\n')
+            self.writer.write(b'Content-Length: ' + cl.encode() + b'\r\n')
 
         # finish headers after wsgi call
         self.finish_headers()
 
         for obj in resp_iter:
-            if obj:
-                self.curr_sock.send(obj)
+            self.writer.write(obj)
 
     def close(self):
         self.reader.close()
+        self.writer.close()
 
     def handle_ws(self):
         ws = WrappedWebSockHandler(self)
@@ -266,6 +309,17 @@ class WSGIProxMiddleware(object):
     CA_ROOT_FILE = 'wsgiprox-ca.pem'
     CA_CERTS_DIR = 'certs'
 
+    SSL_BASIC_OPTIONS = (
+        SSL.OP_CIPHER_SERVER_PREFERENCE
+    )
+
+    SSL_DEFAULT_METHOD = SSL.SSLv23_METHOD
+    SSL_DEFAULT_OPTIONS = (
+        SSL.OP_NO_SSLv2 |
+        SSL.OP_NO_SSLv3 |
+        SSL_BASIC_OPTIONS
+    )
+
     def __init__(self, wsgi,
                  prefix_resolver=None,
                  download_host=None,
@@ -284,8 +338,8 @@ class WSGIProxMiddleware(object):
 
         self.proxy_host = proxy_host or self.DEFAULT_HOST
 
-        self.has_sni = hasattr(ssl, 'HAS_SNI') and ssl.HAS_SNI
-        self.has_alpn = hasattr(ssl, 'HAS_ALPN') and ssl.HAS_ALPN
+        #self.has_sni = hasattr(ssl, 'HAS_SNI') and ssl.HAS_SNI
+        #self.has_alpn = hasattr(ssl, 'HAS_ALPN') and ssl.HAS_ALPN
 
         if self.proxy_host not in self.proxy_apps:
             self.proxy_apps[self.proxy_host] = None
@@ -302,11 +356,10 @@ class WSGIProxMiddleware(object):
         # (generally recommended to create this seperately)
         ca_name = proxy_options.get('ca_name', self.CA_ROOT_NAME)
 
-        certs_dir = proxy_options.get('ca_certs_dir', self.CA_CERTS_DIR)
-        certs_dir = os.path.join(ca_root_dir, certs_dir)
+        #certs_dir = proxy_options.get('ca_certs_dir', self.CA_CERTS_DIR)
+        #certs_dir = os.path.join(ca_root_dir, certs_dir)
 
         self.ca = CertificateAuthority(ca_file=ca_file,
-                                       certs_dir=certs_dir,
                                        ca_name=ca_name,
                                        cert_not_before=-3600)
 
@@ -397,6 +450,8 @@ class WSGIProxMiddleware(object):
                 connect_handler.close()
 
             if curr_sock and curr_sock != raw_sock:
+                curr_sock.shutdown()
+                curr_sock.sock_shutdown(socket.SHUT_RDWR)
                 curr_sock.close()
 
             if env.get('uwsgi.version'):
@@ -405,19 +460,24 @@ class WSGIProxMiddleware(object):
         return []
 
     def _new_context(self):
-        context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
-        if self.has_alpn:
-            context.set_alpn_protocols(['http/1.1'])
+        context = SSL.Context(self.SSL_DEFAULT_METHOD)
+        context.set_options(self.SSL_DEFAULT_OPTIONS)
         return context
+        #context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
+        #if self.has_alpn:
+        #    context.set_alpn_protocols(['http/1.1'])
+        #return context
+
 
     def create_ssl_context(self, hostname):
         if not self.use_wildcard:
-            certfile = self.ca.cert_for_host(hostname)
+            cert, key = self.ca.cert_for_host(hostname)
         else:
-            certfile = self.ca.get_wildcard_cert(hostname)
+            cert, key = self.ca.get_wildcard_cert(hostname)
 
         context = self._new_context()
-        context.load_cert_chain(certfile)
+        context.use_privatekey(key)
+        context.use_certificate(cert)
         return context
 
     def _get_connect_response(self, env):
@@ -433,28 +493,35 @@ Server: wsgiprox\r\n\
         hostname, port = host_port.split(':', 1)
         env['wsgiprox.connect_host'] = hostname
 
-        sock.send(self._get_connect_response(env))
+        sock.sendall(self._get_connect_response(env))
 
         if port == '80':
             return 'http', sock
 
-        def sni_callback(sock, sni_hostname, orig_context):
-            sni_hostname = sni_hostname or hostname
-            sock.context = self.create_ssl_context(sni_hostname)
+        def sni_callback(connection):
+            sni_hostname = connection.get_servername()
+            if sni_hostname:
+                if six.PY3:
+                    sni_hostname = sni_hostname.decode('iso-8859-1')
+            else:
+                sni_hostname = hostname
+            connection.set_context(self.create_ssl_context(sni_hostname))
             env['wsgiprox.connect_host'] = sni_hostname
 
-        if self.has_sni:
-            context = self._new_context()
-            context.set_servername_callback(sni_callback)
-        else:
-            context = self.create_ssl_context(hostname)
+        #if self.has_sni:
+        context = self._new_context()
+        context.set_tlsext_servername_callback(sni_callback)
+        #else:
+        #    context = self.create_ssl_context(hostname)
 
-        ssl_sock = context.wrap_socket(sock,
-                                       server_side=True,
-                                       suppress_ragged_eofs=False,
-                                       do_handshake_on_connect=False,
-                                      )
+        #ssl_sock = context.wrap_socket(sock,
+        #                               server_side=True,
+        #                               suppress_ragged_eofs=False,
+        #                               do_handshake_on_connect=False,
+        #                              )
 
+        ssl_sock = SSL.Connection(context, sock)
+        ssl_sock.set_accept_state()
         ssl_sock.do_handshake()
 
         return 'https', ssl_sock
