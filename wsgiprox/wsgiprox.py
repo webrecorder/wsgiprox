@@ -10,21 +10,19 @@ import six
 import os
 import time
 import io
+import logging
 
 from certauth.certauth import CertificateAuthority
-
-import gevent_openssl; gevent_openssl.monkey_patch()
 
 from OpenSSL import SSL
 
 from wsgiprox.resolvers import FixedResolver
 
+
 try:
     from geventwebsocket.handler import WebSocketHandler
 except:  #pragma: no cover
     WebSocketHandler = object
-
-import logging
 
 BUFF_SIZE = 16384
 
@@ -105,15 +103,9 @@ class SocketReader(io.BufferedIOBase):
 
 
 # ============================================================================
-class SocketWriter(io.BufferedIOBase):
+class SocketWriter(object):
     def __init__(self, socket):
         self.socket = socket
-
-    def writable(self):
-        return True
-
-    def seekable(self):
-        return False
 
     def write(self, buff):
         return self.socket.sendall(buff)
@@ -316,6 +308,20 @@ class WSGIProxMiddleware(object):
         SSL_BASIC_OPTIONS
     )
 
+    @classmethod
+    def set_connection_class(cls):
+        try:
+            import gevent.socket
+            assert(gevent.socket.socket == socket.socket)
+            from wsgiprox.gevent_ssl import SSLConnection as SSLConnection
+            cls.is_gevent_ssl = True
+        except Exception as e:
+            print(e)
+            from OpenSSL.SSL import Connection as SSLConnection
+            cls.is_gevent_ssl = False
+        finally:
+            cls.SSLConnection = SSLConnection
+
     def __init__(self, wsgi,
                  prefix_resolver=None,
                  download_host=None,
@@ -324,6 +330,7 @@ class WSGIProxMiddleware(object):
                  proxy_apps=None):
 
         self._wsgi = wsgi
+        self.set_connection_class()
 
         if isinstance(prefix_resolver, str):
             prefix_resolver = FixedResolver(prefix_resolver)
@@ -447,10 +454,6 @@ class WSGIProxMiddleware(object):
 
             if curr_sock and curr_sock != raw_sock:
                 curr_sock.shutdown()
-                try:
-                    curr_sock.sock_shutdown(socket.SHUT_RDWR)
-                except:
-                    pass
                 curr_sock.close()
 
             if env.get('uwsgi.version'):
@@ -462,11 +465,6 @@ class WSGIProxMiddleware(object):
         context = SSL.Context(self.SSL_DEFAULT_METHOD)
         context.set_options(self.SSL_DEFAULT_OPTIONS)
         return context
-        #context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
-        #if self.has_alpn:
-        #    context.set_alpn_protocols(['http/1.1'])
-        #return context
-
 
     def create_ssl_context(self, hostname):
         if not self.use_wildcard:
@@ -507,19 +505,10 @@ Server: wsgiprox\r\n\
             connection.set_context(self.create_ssl_context(sni_hostname))
             env['wsgiprox.connect_host'] = sni_hostname
 
-        #if self.has_sni:
         context = self._new_context()
         context.set_tlsext_servername_callback(sni_callback)
-        #else:
-        #    context = self.create_ssl_context(hostname)
 
-        #ssl_sock = context.wrap_socket(sock,
-        #                               server_side=True,
-        #                               suppress_ragged_eofs=False,
-        #                               do_handshake_on_connect=False,
-        #                              )
-
-        ssl_sock = SSL.Connection(context, sock)
+        ssl_sock = self.SSLConnection(context, sock)
         ssl_sock.set_accept_state()
         ssl_sock.do_handshake()
 
