@@ -34,6 +34,9 @@ setup(
         'six',
         'certauth>=1.1.5',
         ],
+    dependency_links=[
+        'git+https://github.com/ikreymer/certauth.git@1.2#egg=certauth-1.2',
+    ],
     zip_safe=True,
     data_files=[
     ],

@@ -181,7 +181,6 @@ class ConnectHandler(BaseHandler):
 
     def close(self):
         self.reader.close()
-        self.writer.close()
 
     def handle_ws(self):
         ws = WrappedWebSockHandler(self)
@@ -358,9 +357,6 @@ class WSGIProxMiddleware(object):
         # attempt to create the root_ca_file if doesn't exist
         # (generally recommended to create this seperately)
         ca_name = proxy_options.get('ca_name', self.CA_ROOT_NAME)
-
-        #certs_dir = proxy_options.get('ca_certs_dir', self.CA_CERTS_DIR)
-        #certs_dir = os.path.join(ca_root_dir, certs_dir)
 
         self.ca = CertificateAuthority(ca_file=ca_file,
                                        ca_name=ca_name,
