@@ -1,6 +1,3 @@
-from gevent.monkey import patch_all; patch_all()
-import gevent_openssl; gevent_openssl.monkey_patch()
-
 from wsgiprox.wsgiprox import WSGIProxMiddleware
 from six.moves.urllib.parse import parse_qsl
 import os
@@ -57,7 +54,9 @@ class TestWSGI(object):
 
 
 # ============================================================================
-def make_application(test_ca_dir):
+def make_application(test_ca_dir=None):
+    if not test_ca_dir:
+        test_ca_dir = os.environ.get('CA_ROOT_DIR', '.')
     test_ca_dir = os.path.join(test_ca_dir, 'ca')
     return WSGIProxMiddleware(TestWSGI(),
                               '/prefix/',
@@ -67,13 +66,16 @@ def make_application(test_ca_dir):
                                          }
                               )
 
-application = make_application(os.environ.get('CA_ROOT_DIR', '.'))
+
+application = make_application()
 
 
 # ============================================================================
 if __name__ == "__main__":
+    from gevent.monkey import patch_all; patch_all()
     from gevent.pywsgi import WSGIServer
 
     WSGIServer(('localhost', 8080), application).serve_forever()
+
 
 
