@@ -78,12 +78,12 @@ class SSLConnection(object):
         try:
             return self.__iowait(self._connection.recv, bufsiz, flags)
         except OpenSSL.SSL.ZeroReturnError:
-            return ''
+            return b''
         except OpenSSL.SSL.SysCallError as e:
             if e.args == (-1, 'Unexpected EOF'):
                 # errors when reading empty strings are expected and can be
                 # ignored
-                return ''
+                return b''
             raise
 
     def shutdown(self):

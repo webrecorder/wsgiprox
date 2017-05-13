@@ -146,13 +146,23 @@ class ConnectHandler(BaseHandler):
         self.writer.write(status_line.encode('iso-8859-1'))
 
         found_cl = False
+        found_conn = False
 
         for name, value in headers:
-            if not found_cl and name.lower() == 'content-length':
+            name_lower = name.lower()
+            if not found_cl and name_lower == 'content-length':
                 found_cl = True
+
+            if not found_conn and name_lower == 'connection':
+                if value == 'keep-alive':
+                    value = 'close'
+                found_conn = True
 
             line = name + ': ' + value + '\r\n'
             self.writer.write(line.encode('iso-8859-1'))
+
+        if not found_conn:
+            self.writer.write(b'Connection: close\r\n')
 
         if not found_cl:
             if protocol == 'HTTP/1.1':
@@ -219,7 +229,12 @@ class ConnectHandler(BaseHandler):
 
         self.environ['SERVER_PROTOCOL'] = statusparts[2].strip()
 
-        full_uri = self.scheme + '://' + hostname + statusparts[1]
+        full_uri = self.scheme + '://' + hostname
+        port = self.environ.get('wsgiprox.connect_port', '')
+        if port:
+            full_uri += ':' + port
+
+        full_uri += statusparts[1]
 
         self.resolve(full_uri, self.environ, hostname)
 
@@ -302,6 +317,7 @@ class WSGIProxMiddleware(object):
 
     SSL_DEFAULT_METHOD = SSL.SSLv23_METHOD
     SSL_DEFAULT_OPTIONS = (
+        SSL.OP_NO_TICKET |
         SSL.OP_NO_SSLv2 |
         SSL.OP_NO_SSLv3 |
         SSL_BASIC_OPTIONS
@@ -460,6 +476,7 @@ class WSGIProxMiddleware(object):
     def _new_context(self):
         context = SSL.Context(self.SSL_DEFAULT_METHOD)
         context.set_options(self.SSL_DEFAULT_OPTIONS)
+        context.set_session_cache_mode(SSL.SESS_CACHE_OFF)
         return context
 
     def create_ssl_context(self, hostname):
@@ -488,8 +505,15 @@ Server: wsgiprox\r\n\
 
         sock.sendall(self._get_connect_response(env))
 
-        if port != '443':
+        if port == '80':
             return 'http', sock
+
+        if port != '443':
+            env['wsgiprox.connect_port'] = port
+            peek_buff = sock.recv(16, socket.MSG_PEEK)
+            # http websocket traffic would start with a GET
+            if peek_buff.startswith(b'GET '):
+                return 'http', sock
 
         def sni_callback(connection):
             sni_hostname = connection.get_servername()

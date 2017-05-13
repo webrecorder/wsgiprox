@@ -67,6 +67,14 @@ class BaseWSGIProx(object):
         assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
 
+    def test_non_chunked_custom_port(self, scheme):
+        res = requests.get('{0}://example.com:123/path/file?foo=bar&addproxyhost=true'.format(scheme),
+                           proxies=self.proxies,
+                           verify=self.root_ca_file)
+
+        assert(res.headers['Content-Length'] != '')
+        assert(res.text == 'Requested Url: /prefix/{0}://example.com:123/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
+
     @pytest.mark.skipif(sys.version_info >= (3,0) and sys.version_info < (3,4),
                         reason='Not supported in py3.3')
     def test_with_sni(self):
@@ -184,6 +192,19 @@ class BaseWSGIProx(object):
         ws.send('{0} message'.format(ws_scheme))
         msg = ws.recv()
         assert(msg == 'WS Request Url: /prefix/{0}://example.com/websocket?a=b Echo: {1} message'.format(scheme, ws_scheme))
+
+    def test_websocket_custom_port(self, ws_scheme):
+        scheme = ws_scheme.replace('ws', 'http')
+        pytest.importorskip('geventwebsocket.handler')
+
+        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
+        ws.connect('{0}://example.com:456/websocket?a=b'.format(ws_scheme),
+                   http_proxy_host='localhost',
+                   http_proxy_port=self.port)
+
+        ws.send('{0} message'.format(ws_scheme))
+        msg = ws.recv()
+        assert(msg == 'WS Request Url: /prefix/{0}://example.com:456/websocket?a=b Echo: {1} message'.format(scheme, ws_scheme))
 
     def test_websocket_fixed_host(self, ws_scheme):
         scheme = ws_scheme.replace('ws', 'http')
