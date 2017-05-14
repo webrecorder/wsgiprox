@@ -374,9 +374,10 @@ class WSGIProxMiddleware(object):
         # (generally recommended to create this seperately)
         ca_name = proxy_options.get('ca_name', self.CA_ROOT_NAME)
 
-        self.ca = CertificateAuthority(ca_file=ca_file,
-                                       ca_name=ca_name,
+        self.ca = CertificateAuthority(ca_name, ca_file,
                                        cert_not_before=-3600)
+
+        self.root_ca_file = self.ca.get_root_pem_filename()
 
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 
@@ -387,10 +388,6 @@ class WSGIProxMiddleware(object):
         self.enable_ws = proxy_options.get('enable_websockets', True)
         if WebSocketHandler == object:
             self.enable_ws = None
-
-    @property
-    def root_ca_file(self):
-        return self.ca.ca_file
 
     def wsgi(self, env, start_response):
         # see if the host matches one of the proxy app hosts
@@ -626,13 +623,9 @@ class CertDownloader(object):
         path = env.get('PATH_INFO')
 
         if path == self.DL_PEM:
-            buff = b''
-            with open(self.ca.ca_file, 'rb') as fh:
-                buff = fh.read()
+            buff = self.ca.get_root_pem()
 
             content_type = 'application/x-x509-ca-cert'
-
-            #buff = buff.split(b'-----END PRIVATE KEY-----')[-1].lstrip()
 
         elif path == self.DL_P12:
             buff = self.ca.get_root_PKCS12()
