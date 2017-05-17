@@ -53,11 +53,11 @@ For example, the following Resolver translates the url to a custom prefix based 
 
 .. code:: python
 
-  class IPResolver(object):
-      def __call__(self, url, environ):
-          return '/' + environ['REMOTE_ADDR'] + '/' + url
+    class IPResolver(object):
+        def __call__(self, url, environ):
+            return '/' + environ['REMOTE_ADDR'] + '/' + url
        
-  application = WSGIProxMiddleware(application, IPResolver())
+    application = WSGIProxMiddleware(application, IPResolver())
       
 
 HTTPS CA
@@ -67,16 +67,15 @@ To support HTTPS proxy, ``wsgiprox`` creates a custom CA (Certificate Authority)
 
 By default, ``wsgiprox`` looks for CA .pem at: ``<working dir>/ca/wsgiprox-ca.pem`` and auto-creates this bundle using the `certauth <https://github.com/ikreymer/certauth>`_ library.
 
-The CA file can also be specified explicitly via ``proxy_options`` dict, along with default dir to store certs.
+The CA name and CA root cert filename can also be specified explicitly via ``proxy_options`` dict.
 
-The default settings are equivalent to the following:
+By default, the following options are used:
 
 .. code:: python
 
-  WSGIProxMiddleware(..., proxy_options={ca_root_dir='./ca',
-                                         ca_file='wsgiprox-ca.pem',
-                                         ca_certs_dir='certs'})
-                                         
+    WSGIProxMiddleware(..., proxy_options={ca_name='wsgiprox https proxy CA',
+                                           ca_file='./ca/wsgiprox-ca.pem'})
+
 The generated ``wsgiprox-ca.pem`` can be imported directly into most browsers directly as a trusted certificate authority, allowing the browser to accept HTTPS content proxied through ``wsgiprox``
 
 Downloading Certs
@@ -119,8 +118,8 @@ Internally, the ``proxy_apps`` dict is used to configure the cert downloader app
 
 .. code:: python
 
-  proxy_apps['proxy_host'] = None
-  proxy_apps['download_host'] = CertDownloader(self.ca)
+    proxy_apps['proxy_host'] = None
+    proxy_apps['download_host'] = CertDownloader(self.ca)
 
 
 Websockets
