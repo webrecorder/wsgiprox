@@ -290,10 +290,7 @@ class WSGIProxMiddleware(object):
 
     CA_ROOT_NAME = 'wsgiprox https proxy CA'
 
-    CA_ROOT_DIR = os.path.join('.', 'ca')
-
-    CA_ROOT_FILE = 'wsgiprox-ca.pem'
-    CA_CERTS_DIR = 'certs'
+    CA_ROOT_FILE = os.path.join('.', 'ca', 'wsgiprox-ca.pem')
 
     SSL_BASIC_OPTIONS = (
         SSL.OP_CIPHER_SERVER_PREFERENCE
@@ -349,16 +346,12 @@ class WSGIProxMiddleware(object):
         # HTTPS Only Options
         proxy_options = proxy_options or {}
 
-        ca_root_dir = proxy_options.get('ca_root_dir', self.CA_ROOT_DIR)
-
-        ca_file = proxy_options.get('ca_file', self.CA_ROOT_FILE)
-        ca_file = os.path.join(ca_root_dir, ca_file)
-
-        # attempt to create the root_ca_file if doesn't exist
-        # (generally recommended to create this seperately)
         ca_name = proxy_options.get('ca_name', self.CA_ROOT_NAME)
 
-        self.ca = CertificateAuthority(ca_name, ca_file,
+        ca_file_cache = proxy_options.get('ca_file_cache', self.CA_ROOT_FILE)
+
+        self.ca = CertificateAuthority(ca_name=ca_name,
+                                       ca_file_cache=ca_file_cache,
                                        cert_not_before=-3600)
 
         self.root_ca_file = self.ca.get_root_pem_filename()

@@ -45,9 +45,10 @@ class BaseWSGIProx(object):
     @classmethod
     def setup_class(cls):
         cls.test_ca_dir = tempfile.mkdtemp()
+        cls.root_ca_file = os.path.join(cls.test_ca_dir, 'wsgiprox-ca-test.pem')
 
-        cls.app = make_application(cls.test_ca_dir)
-        cls.root_ca_file = cls.app.root_ca_file
+        cls.app = make_application(cls.root_ca_file)
+
 
     @classmethod
     def teardown_class(cls):
@@ -296,10 +297,8 @@ class Test_uwsgi_WSGIProx(BaseWSGIProx):
     def setup_class(cls):
         super(Test_uwsgi_WSGIProx, cls).setup_class()
 
-        cls.root_ca_file = os.path.join(cls.test_ca_dir, 'ca', 'wsgiprox-ca.pem')
-
         env = os.environ.copy()
-        env['CA_ROOT_DIR'] = cls.test_ca_dir
+        env['CA_ROOT_FILE'] = cls.root_ca_file
 
         curr_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)))
 

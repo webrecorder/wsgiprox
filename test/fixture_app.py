@@ -57,13 +57,14 @@ class TestWSGI(object):
 
 
 # ============================================================================
-def make_application(test_ca_dir=None):
-    if not test_ca_dir:
-        test_ca_dir = os.environ.get('CA_ROOT_DIR', '.')
-    test_ca_dir = os.path.join(test_ca_dir, 'ca')
+def make_application(test_ca_file=None):
+    if not test_ca_file:
+        test_ca_file = os.environ.get('CA_ROOT_FILE',
+                                      os.path.join('.', 'wsgiprox-ca-test.pem'))
+
     return WSGIProxMiddleware(TestWSGI(),
                               '/prefix/',
-                              proxy_options={'ca_root_dir': test_ca_dir},
+                              proxy_options={'ca_file_cache': test_ca_file},
                               proxy_apps={'proxy-alias': '',
                                           'proxy-app-1': CustomApp()
                                          }
