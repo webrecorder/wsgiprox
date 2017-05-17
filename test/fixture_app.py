@@ -54,7 +54,7 @@ class TestWSGI(object):
 
 # ============================================================================
 def make_application(test_ca_file=None):
-    if not test_ca_file:
+    if test_ca_file is None:
         test_ca_file = os.environ.get('CA_ROOT_FILE',
                                       os.path.join('.', 'wsgiprox-ca-test.pem'))
 

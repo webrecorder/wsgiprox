@@ -352,9 +352,13 @@ class WSGIProxMiddleware(object):
 
         self.ca = CertificateAuthority(ca_name=ca_name,
                                        ca_file_cache=ca_file_cache,
+                                       cert_cache=None,
                                        cert_not_before=-3600)
 
-        self.root_ca_file = self.ca.get_root_pem_filename()
+        try:
+            self.root_ca_file = self.ca.get_root_pem_filename()
+        except Exception as e:
+            self.root_ca_file = None
 
         self.use_wildcard = proxy_options.get('use_wildcard_certs', True)
 

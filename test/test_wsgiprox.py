@@ -56,6 +56,13 @@ class BaseWSGIProx(object):
                 'https': 'https://{0}:{1}'.format(host, port)
                }
 
+    def test_in_mem_ca(self):
+        from .fixture_app import make_application
+        ca_dict = {}
+        app = make_application(ca_dict)
+        assert ca_dict != {}
+        assert app.root_ca_file == None
+
     def test_non_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
