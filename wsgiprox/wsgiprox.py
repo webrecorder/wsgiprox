@@ -311,7 +311,7 @@ class WSGIProxMiddleware(object):
             assert(gevent.socket.socket == socket.socket)
             from wsgiprox.gevent_ssl import SSLConnection as SSLConnection
             cls.is_gevent_ssl = True
-        except Exception as e:
+        except Exception as e:  #pragma: no cover
             print(e)
             from OpenSSL.SSL import Connection as SSLConnection
             cls.is_gevent_ssl = False
@@ -441,13 +441,13 @@ class WSGIProxMiddleware(object):
             if curr_sock and curr_sock != raw_sock:
                 # this seems to necessary to avoid tls data read later
                 # in the same gevent
-                curr_sock.recv(0)
+                if self.is_gevent_ssl:
+                    curr_sock.recv(0)
 
                 curr_sock.shutdown()
                 curr_sock.close()
 
-            if env.get('uwsgi.version'):
-                start_response('200 OK', [])
+            start_response('200 OK', [])
 
         return []
 

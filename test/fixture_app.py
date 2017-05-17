@@ -1,7 +1,3 @@
-if __name__ == "__main__":
-    from gevent.monkey import patch_all; patch_all()
-
-from wsgiprox.wsgiprox import WSGIProxMiddleware
 from six.moves.urllib.parse import parse_qsl
 import os
 
@@ -62,22 +58,31 @@ def make_application(test_ca_file=None):
         test_ca_file = os.environ.get('CA_ROOT_FILE',
                                       os.path.join('.', 'wsgiprox-ca-test.pem'))
 
+    from wsgiprox.wsgiprox import WSGIProxMiddleware
     return WSGIProxMiddleware(TestWSGI(),
                               '/prefix/',
-                              proxy_options={'ca_file_cache': test_ca_file},
+                              proxy_options={'ca_name': 'wsgiprox test ca',
+                                             'ca_file_cache': test_ca_file},
                               proxy_apps={'proxy-alias': '',
                                           'proxy-app-1': CustomApp()
                                          }
                               )
 
 
-application = make_application()
+# ============================================================================
+try:
+    import uwsgi
+    application = make_application()
+except:
+    pass
 
 
 # ============================================================================
 if __name__ == "__main__":
     from gevent.pywsgi import WSGIServer
+    from gevent.monkey import patch_all; patch_all()
 
+    application = make_application()
     WSGIServer(('localhost', 8080), application).serve_forever()
 
 

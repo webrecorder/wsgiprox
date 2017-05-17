@@ -3,7 +3,6 @@ from gevent.pywsgi import WSGIServer
 
 import gevent
 
-import ssl
 import sys
 
 import requests
@@ -11,10 +10,7 @@ import websocket
 import pytest
 import subprocess
 
-from wsgiprox.wsgiprox import WSGIProxMiddleware
-from wsgiprox.resolvers import FixedResolver, ProxyAuthResolver
-
-from .fixture_app import make_application
+from wsgiprox.resolvers import ProxyAuthResolver
 
 from mock import patch
 
@@ -47,8 +43,8 @@ class BaseWSGIProx(object):
         cls.test_ca_dir = tempfile.mkdtemp()
         cls.root_ca_file = os.path.join(cls.test_ca_dir, 'wsgiprox-ca-test.pem')
 
+        from .fixture_app import make_application
         cls.app = make_application(cls.root_ca_file)
-
 
     @classmethod
     def teardown_class(cls):
@@ -79,6 +75,7 @@ class BaseWSGIProx(object):
     @pytest.mark.skipif(sys.version_info >= (3,0) and sys.version_info < (3,4),
                         reason='Not supported in py3.3')
     def test_with_sni(self):
+        import ssl
         conn = SNIHTTPSConnection('localhost', self.port, context=ssl.create_default_context(cafile=self.root_ca_file))
         # set CONNECT host:port
         conn.set_tunnel('93.184.216.34', 443)
