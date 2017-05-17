@@ -92,20 +92,6 @@ class BaseWSGIProx(object):
         assert(text == 'Requested Url: /prefix/https://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox')
 
 
-        conn = SNIHTTPSConnection('localhost', self.port,
-                                  context=ssl.create_default_context(cafile=self.root_ca_file))
-        # set CONNECT host:port
-        conn.set_tunnel('93.184.216.34', 443)
-        # set actual hostname
-        conn._server_hostname = 'example.com'
-        conn.request('GET', '/path/file?foo=bar&addproxyhost=true')
-        res = conn.getresponse()
-        text = res.read().decode('utf-8')
-        conn.close()
-
-        assert(res.getheader('Content-Length') != '')
-        assert(text == 'Requested Url: /prefix/https://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox')
-
     def test_chunked(self, scheme):
         res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
                            proxies=self.proxies,

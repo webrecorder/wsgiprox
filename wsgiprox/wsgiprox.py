@@ -95,9 +95,6 @@ class SocketReader(io.BufferedIOBase):
     def readable(self):
         return True
 
-    def seekable(self):
-        return False
-
     def read(self, size):
         return self.socket.recv(size)
 
@@ -146,23 +143,13 @@ class ConnectHandler(BaseHandler):
         self.writer.write(status_line.encode('iso-8859-1'))
 
         found_cl = False
-        found_conn = False
 
         for name, value in headers:
-            name_lower = name.lower()
-            if not found_cl and name_lower == 'content-length':
+            if not found_cl and name.lower() == 'content-length':
                 found_cl = True
-
-            if not found_conn and name_lower == 'connection':
-                if value == 'keep-alive':
-                    value = 'close'
-                found_conn = True
 
             line = name + ': ' + value + '\r\n'
             self.writer.write(line.encode('iso-8859-1'))
-
-        if not found_conn:
-            self.writer.write(b'Connection: close\r\n')
 
         if not found_cl:
             if protocol == 'HTTP/1.1':
@@ -210,9 +197,6 @@ class ConnectHandler(BaseHandler):
 
     def convert_env(self):
         statusline = self.reader.readline().rstrip()
-
-        if not statusline:
-            statusline = self.reader.readline().rstrip()
 
         if six.PY3:  #pragma: no cover
             statusline = statusline.decode('iso-8859-1')
@@ -462,6 +446,10 @@ class WSGIProxMiddleware(object):
                 connect_handler.close()
 
             if curr_sock and curr_sock != raw_sock:
+                # this seems to necessary to avoid tls data read later
+                # in the same gevent
+                curr_sock.recv(0)
+
                 curr_sock.shutdown()
                 curr_sock.close()
 
@@ -477,10 +465,9 @@ class WSGIProxMiddleware(object):
         return context
 
     def create_ssl_context(self, hostname):
-        if not self.use_wildcard:
-            cert, key = self.ca.cert_for_host(hostname)
-        else:
-            cert, key = self.ca.get_wildcard_cert(hostname)
+        cert, key = self.ca.load_cert(hostname,
+                                      wildcard=self.use_wildcard,
+                                      wildcard_use_parent=True)
 
         context = self._new_context()
         context.use_privatekey(key)
@@ -514,15 +501,23 @@ Server: wsgiprox\r\n\
 
         def sni_callback(connection):
             sni_hostname = connection.get_servername()
-            if sni_hostname:
-                if six.PY3:
-                    sni_hostname = sni_hostname.decode('iso-8859-1')
-            else:
-                sni_hostname = hostname
+
+            # curl -k (unverified) mode results in empty hostname here
+            # requests unverified mode still includes an sni hostname
+            if not sni_hostname:
+                return
+
+            if six.PY3:
+                sni_hostname = sni_hostname.decode('iso-8859-1')
+
+            # if same host as CONNECT header, then just keep current context
+            if sni_hostname == hostname:
+                return
+
             connection.set_context(self.create_ssl_context(sni_hostname))
             env['wsgiprox.connect_host'] = sni_hostname
 
-        context = self._new_context()
+        context = self.create_ssl_context(hostname)
         context.set_tlsext_servername_callback(sni_callback)
 
         ssl_sock = self.SSLConnection(context, sock)

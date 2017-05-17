@@ -1,3 +1,6 @@
+if __name__ == "__main__":
+    from gevent.monkey import patch_all; patch_all()
+
 from wsgiprox.wsgiprox import WSGIProxMiddleware
 from six.moves.urllib.parse import parse_qsl
 import os
@@ -72,7 +75,6 @@ application = make_application()
 
 # ============================================================================
 if __name__ == "__main__":
-    from gevent.monkey import patch_all; patch_all()
     from gevent.pywsgi import WSGIServer
 
     WSGIServer(('localhost', 8080), application).serve_forever()
