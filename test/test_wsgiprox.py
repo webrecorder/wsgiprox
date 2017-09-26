@@ -56,6 +56,11 @@ class BaseWSGIProx(object):
                 'https': 'https://{0}:{1}'.format(host, port)
                }
 
+    def _init_ws(self):
+        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file,
+                                         'ca_cert': self.root_ca_file})
+        return ws
+
     def test_in_mem_ca(self):
         from .fixture_app import make_application
         ca_dict = {}
@@ -175,7 +180,7 @@ class BaseWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
+        ws = self._init_ws()
         ws.connect('{0}://example.com/websocket?a=b'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
@@ -188,7 +193,7 @@ class BaseWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
+        ws = self._init_ws()
         ws.connect('{0}://example.com:456/websocket?a=b'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
@@ -201,7 +206,7 @@ class BaseWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
+        ws = self._init_ws()
         ws.connect('{0}://wsgiprox/websocket?a=b'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
@@ -214,7 +219,7 @@ class BaseWSGIProx(object):
         scheme = ws_scheme.replace('ws', 'http')
         pytest.importorskip('geventwebsocket.handler')
 
-        ws = websocket.WebSocket(sslopt={'ca_certs': self.root_ca_file})
+        ws = self._init_ws()
         ws.connect('{0}://wsgiprox/websocket?ignore_ws=true'.format(ws_scheme),
                    http_proxy_host='localhost',
                    http_proxy_port=self.port)
