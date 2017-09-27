@@ -33,6 +33,10 @@ class SSLConnection(object):
                 wait_read(fd, timeout=timeout)
             except OpenSSL.SSL.WantWriteError:
                 wait_write(fd, timeout=timeout)
+            except OpenSSL.SSL.SysCallError as e:
+                if e.args == (-1, 'Unexpected EOF'):
+                    return b''
+                raise
 
     #def accept(self):
     #    sock, addr = self._sock.accept()
@@ -62,14 +66,7 @@ class SSLConnection(object):
             data = data[res:]
 
     def __send(self, send_method, data, flags=0):
-        try:
-            return self.__iowait(send_method, data, flags)
-        except OpenSSL.SSL.SysCallError as e:
-            if e.args[0] == -1 and not data:
-                # errors when writing empty strings are expected and can be
-                # ignored
-                return 0
-            raise
+        return self.__iowait(send_method, data, flags)
 
     def recv(self, bufsiz, flags=0):
         pending = self._connection.pending()
@@ -79,12 +76,6 @@ class SSLConnection(object):
             return self.__iowait(self._connection.recv, bufsiz, flags)
         except OpenSSL.SSL.ZeroReturnError:
             return b''
-        except OpenSSL.SSL.SysCallError as e:
-            if e.args == (-1, 'Unexpected EOF'):
-                # errors when reading empty strings are expected and can be
-                # ignored
-                return b''
-            raise
 
     def shutdown(self):
         return self.__iowait(self._connection.shutdown)

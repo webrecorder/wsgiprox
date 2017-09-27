@@ -26,6 +26,8 @@ except:  #pragma: no cover
 
 BUFF_SIZE = 16384
 
+logger = logging.getLogger(__file__)
+
 
 # ============================================================================
 class WrappedWebSockHandler(WebSocketHandler):
@@ -33,7 +35,6 @@ class WrappedWebSockHandler(WebSocketHandler):
         self.environ = connect_handler.environ
         self.start_response = connect_handler.start_response
         self.request_version = 'HTTP/1.1'
-        self._logger = logging.getLogger(__file__)
 
         self.socket = connect_handler.curr_sock
         self.rfile = connect_handler.reader
@@ -46,7 +47,7 @@ class WrappedWebSockHandler(WebSocketHandler):
 
     @property
     def logger(self):
-        return self._logger
+        return logger
 
 
 # ============================================================================
@@ -205,7 +206,7 @@ class ConnectHandler(BaseHandler):
         hostname = self.environ['wsgiprox.connect_host']
 
         if len(statusparts) < 3:
-            raise Exception('Invalid Proxy Request: ' + statusline + ' from ' + hostname)
+            raise Exception('Invalid Proxy Request Line: length={0} from='.format(len(statusline), hostname))
 
         self.environ['wsgi.url_scheme'] = self.scheme
 
@@ -312,7 +313,7 @@ class WSGIProxMiddleware(object):
             from wsgiprox.gevent_ssl import SSLConnection as SSLConnection
             cls.is_gevent_ssl = True
         except Exception as e:  #pragma: no cover
-            print(e)
+            logger.debug(str(e))
             from OpenSSL.SSL import Connection as SSLConnection
             cls.is_gevent_ssl = False
         finally:
@@ -430,10 +431,8 @@ class WSGIProxMiddleware(object):
             else:
                 connect_handler.finish_response(raw_sock)
 
-        except:
-            import traceback
-            traceback.print_exc()
-
+        except Exception as e:
+            logger.debug(str(e))
             start_response('500 Unexpected Error',
                            [('Content-Length', '0')])
 
