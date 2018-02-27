@@ -111,9 +111,8 @@ class SocketWriter(object):
 
 # ============================================================================
 class ConnectHandler(BaseHandler):
-    def __init__(self, curr_sock, environ, scheme, wsgi, resolve):
+    def __init__(self, curr_sock, scheme, wsgi, resolve):
         self.curr_sock = curr_sock
-        self.environ = environ
         self.scheme = scheme
 
         self.wsgi = wsgi
@@ -123,11 +122,22 @@ class ConnectHandler(BaseHandler):
         self.reader = io.BufferedReader(reader, BUFF_SIZE)
         self.writer = SocketWriter(curr_sock)
 
+        self.is_keepalive = True
+
+    def __call__(self, environ, enable_ws):
         self._chunk = False
         self._buffer = False
         self.headers_finished = False
 
-        self.convert_env()
+        self.convert_environ(environ)
+
+        # check for websocket upgrade, if enabled
+        if enable_ws and self.environ.get('HTTP_UPGRADE', '') == 'websocket':
+            self.handle_ws()
+        else:
+            self.finish_response()
+
+        self.is_keepalive = self.environ.get('HTTP_CONNECTION', '') == 'keep-alive'
 
     def write(self, data):
         self.finish_headers()
@@ -161,7 +171,7 @@ class ConnectHandler(BaseHandler):
 
         return self.write
 
-    def finish_response(self, raw_sock):
+    def finish_response(self):
         resp_iter = self.wsgi(self.environ, self.start_response)
 
         if self._chunk:
@@ -196,7 +206,9 @@ class ConnectHandler(BaseHandler):
 
         self.wsgi(self.environ, ignore_sr)
 
-    def convert_env(self):
+    def convert_environ(self, environ):
+        self.environ = environ.copy()
+
         statusline = self.reader.readline().rstrip()
 
         if six.PY3:  #pragma: no cover
@@ -255,17 +267,15 @@ class ConnectHandler(BaseHandler):
 class HttpProxyHandler(BaseHandler):
     PROXY_CONN_CLOSE = ('Proxy-Connection', 'close')
 
-    def __init__(self, environ, start_response, wsgi, resolve):
-        self.environ = environ
-
+    def __init__(self, start_response, wsgi, resolve):
         self.real_start_response = start_response
 
         self.wsgi = wsgi
         self.resolve = resolve
 
-        self.convert_env()
+    def convert_environ(self, environ):
+        self.environ = environ
 
-    def convert_env(self):
         full_uri = self.environ['REQUEST_URI']
 
         parts = urlsplit(full_uri)
@@ -281,7 +291,8 @@ class HttpProxyHandler(BaseHandler):
 
         return self.real_start_response(statusline, headers, exc_info)
 
-    def __call__(self):
+    def __call__(self, environ):
+        self.convert_environ(environ)
         return self.wsgi(self.environ, self.start_response)
 
 
@@ -304,6 +315,12 @@ class WSGIProxMiddleware(object):
         SSL.OP_NO_SSLv3 |
         SSL_BASIC_OPTIONS
     )
+
+    CONNECT_RESPONSE_1_1 = b'HTTP/1.1 200 Connection Established\r\n\r\n'
+
+    CONNECT_RESPONSE_1_0 = b'HTTP/1.0 200 Connection Established\r\n\r\n'
+
+    DEFAULT_MAX_TUNNELS = 50
 
     @classmethod
     def set_connection_class(cls):
@@ -338,9 +355,6 @@ class WSGIProxMiddleware(object):
 
         self.proxy_host = proxy_host or self.DEFAULT_HOST
 
-        #self.has_sni = hasattr(ssl, 'HAS_SNI') and ssl.HAS_SNI
-        #self.has_alpn = hasattr(ssl, 'HAS_ALPN') and ssl.HAS_ALPN
-
         if self.proxy_host not in self.proxy_apps:
             self.proxy_apps[self.proxy_host] = None
 
@@ -355,6 +369,15 @@ class WSGIProxMiddleware(object):
                                        ca_file_cache=ca_file_cache,
                                        cert_cache=None,
                                        cert_not_before=-3600)
+
+        self.keepalive_max = proxy_options.get('keepalive_max', self.DEFAULT_MAX_TUNNELS)
+        self.keepalive_opts = hasattr(socket, 'TCP_KEEPIDLE')
+
+        self._tcp_keepidle = proxy_options.get('tcp_keepidle', 60)
+        self._tcp_keepintvl = proxy_options.get('tcp_keepintvl', 5)
+        self._tcp_keepcnt = proxy_options.get('tcp_keepcnt', 3)
+
+        self.num_open_tunnels = 0
 
         try:
             self.root_ca_file = self.ca.get_root_pem_filename()
@@ -402,8 +425,8 @@ class WSGIProxMiddleware(object):
         if res is not None:
             return res
 
-        handler = HttpProxyHandler(env, start_response, self.wsgi, self.resolve)
-        return handler()
+        handler = HttpProxyHandler(start_response, self.wsgi, self.resolve)
+        return handler(env)
 
     def handle_connect(self, env, start_response):
         raw_sock = self.get_raw_socket(env)
@@ -422,14 +445,15 @@ class WSGIProxMiddleware(object):
         try:
             scheme, curr_sock = self.wrap_socket(env, raw_sock)
 
-            connect_handler = ConnectHandler(curr_sock, env, scheme,
+            connect_handler = ConnectHandler(curr_sock, scheme,
                                              self.wsgi, self.resolve)
 
-            # check for websocket upgrade, if enabled
-            if self.enable_ws and env.get('HTTP_UPGRADE', '') == 'websocket':
-                connect_handler.handle_ws()
-            else:
-                connect_handler.finish_response(raw_sock)
+            self.num_open_tunnels += 1
+
+            connect_handler(env, self.enable_ws)
+
+            while self.keep_alive(connect_handler):
+                connect_handler(env, self.enable_ws)
 
         except Exception as e:
             logger.debug(str(e))
@@ -439,6 +463,7 @@ class WSGIProxMiddleware(object):
 
         finally:
             if connect_handler:
+                self.num_open_tunnels -= 1
                 connect_handler.close()
 
             if curr_sock and curr_sock != raw_sock:
@@ -453,6 +478,20 @@ class WSGIProxMiddleware(object):
             start_response('200 OK', [])
 
         return []
+
+    def keep_alive(self, connect_handler):
+        # keepalive disabled
+        if self.keepalive_max < 0:
+            return False
+
+        if not connect_handler.is_keepalive:
+            return False
+
+        # no max
+        if self.keepalive_max == 0:
+            return True
+
+        return (self.num_open_tunnels <= self.keepalive_max)
 
     def _new_context(self):
         context = SSL.Context(self.SSL_DEFAULT_METHOD)
@@ -471,14 +510,20 @@ class WSGIProxMiddleware(object):
         return context
 
     def _get_connect_response(self, env):
-        buff = b'\
-HTTP/1.0 200 Connection Established\r\n\
-Proxy-Connection: close\r\n\
-Server: wsgiprox\r\n\
-\r\n'
-        return buff
+        if env.get('SERVER_PROTOCOL', 'HTTP/1.0') == 'HTTP/1.1':
+            return self.CONNECT_RESPONSE_1_1
+        else:
+            return self.CONNECT_RESPONSE_1_0
 
     def wrap_socket(self, env, sock):
+        if self.keepalive_max >= 0:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            if self.keepalive_opts:  #pragma: no cover
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, self._tcp_keepidle)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, self._tcp_keepintvl)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, self._tcp_keepcnt)
+
         host_port = env['PATH_INFO']
         hostname, port = host_port.split(':', 1)
         env['wsgiprox.connect_host'] = hostname
@@ -533,6 +578,7 @@ Server: wsgiprox\r\n\
 
         auth_req = 'Basic realm="{0}"'.format(auth_req)
         headers = [('Proxy-Authenticate', auth_req),
+                   ('Proxy-Connection', 'close'),
                    ('Content-Length', '0')]
 
         start_response('407 Proxy Authentication', headers)

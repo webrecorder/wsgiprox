@@ -53,16 +53,19 @@ class TestWSGI(object):
 
 
 # ============================================================================
-def make_application(test_ca_file=None):
+def make_application(test_ca_file=None, proxy_options=None):
+    proxy_options = proxy_options or {}
     if test_ca_file is None:
         test_ca_file = os.environ.get('CA_ROOT_FILE',
                                       os.path.join('.', 'wsgiprox-ca-test.pem'))
 
+    proxy_options['ca_name'] = 'wsgiprox test ca'
+    proxy_options['ca_file_cache'] = test_ca_file
+
     from wsgiprox.wsgiprox import WSGIProxMiddleware
     return WSGIProxMiddleware(TestWSGI(),
                               '/prefix/',
-                              proxy_options={'ca_name': 'wsgiprox test ca',
-                                             'ca_file_cache': test_ca_file},
+                              proxy_options=proxy_options,
                               proxy_apps={'proxy-alias': '',
                                           'proxy-app-1': CustomApp()
                                          }

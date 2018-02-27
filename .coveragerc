@@ -1,5 +1,6 @@
 [run]
 concurrency = gevent
+branch = True
 omit =
     */test/*
 

@@ -46,6 +46,8 @@ class BaseWSGIProx(object):
         from .fixture_app import make_application
         cls.app = make_application(cls.root_ca_file)
 
+        cls.sesh = requests.session()
+
     @classmethod
     def teardown_class(cls):
         shutil.rmtree(cls.test_ca_dir)
@@ -69,7 +71,7 @@ class BaseWSGIProx(object):
         assert app.root_ca_file == None
 
     def test_non_chunked(self, scheme):
-        res = requests.get('{0}://example.com/path/file?foo=bar&addproxyhost=true'.format(scheme),
+        res = self.sesh.get('{0}://example.com/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
@@ -77,9 +79,9 @@ class BaseWSGIProx(object):
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
 
     def test_non_chunked_custom_port(self, scheme):
-        res = requests.get('{0}://example.com:123/path/file?foo=bar&addproxyhost=true'.format(scheme),
-                           proxies=self.proxies,
-                           verify=self.root_ca_file)
+        res = self.sesh.get('{0}://example.com:123/path/file?foo=bar&addproxyhost=true'.format(scheme),
+                            proxies=self.proxies,
+                            verify=self.root_ca_file)
 
         assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com:123/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
@@ -103,9 +105,9 @@ class BaseWSGIProx(object):
 
 
     def test_chunked(self, scheme):
-        res = requests.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
-                           proxies=self.proxies,
-                           verify=self.root_ca_file)
+        res = self.sesh.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
+                            proxies=self.proxies,
+                            verify=self.root_ca_file)
 
         if not (self.server_type == 'uwsgi' and scheme == 'http'):
             assert(res.headers['Transfer-Encoding'] == 'chunked')
@@ -128,7 +130,7 @@ class BaseWSGIProx(object):
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
 
     def test_write_callable(self, scheme):
-        res = requests.get('{0}://example.com/path/file?foo=bar&write=true'.format(scheme),
+        res = self.sesh.get('{0}://example.com/path/file?foo=bar&write=true'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
@@ -142,35 +144,35 @@ class BaseWSGIProx(object):
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/post Post Data: ABC=1&xyz=2'.format(scheme))
 
     def test_fixed_host(self, scheme):
-        res = requests.get('{0}://wsgiprox/path/file?foo=bar'.format(scheme),
+        res = self.sesh.get('{0}://wsgiprox/path/file?foo=bar'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
     def test_alt_host(self, scheme):
-        res = requests.get('{0}://proxy-alias/path/file?foo=bar&addproxyhost=true'.format(scheme),
+        res = self.sesh.get('{0}://proxy-alias/path/file?foo=bar&addproxyhost=true'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar&addproxyhost=true Proxy Host: proxy-alias')
 
     def test_proxy_app(self, scheme):
-        res = requests.get('{0}://proxy-app-1/path/file'.format(scheme),
+        res = self.sesh.get('{0}://proxy-app-1/path/file'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
         assert(res.text == 'Custom App: proxy-app-1 req to /path/file')
 
     def test_download_pem(self, scheme):
-        res = requests.get('{0}://wsgiprox/download/pem'.format(scheme),
+        res = self.sesh.get('{0}://wsgiprox/download/pem'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
         assert res.headers['content-type'] == 'application/x-x509-ca-cert'
 
     def test_download_pkcs12(self, scheme):
-        res = requests.get('{0}://wsgiprox/download/p12'.format(scheme),
+        res = self.sesh.get('{0}://wsgiprox/download/p12'.format(scheme),
                            proxies=self.proxies,
                            verify=self.root_ca_file)
 
@@ -230,7 +232,7 @@ class BaseWSGIProx(object):
             msg = ws.recv()
 
     def test_non_proxy_passthrough(self):
-        res = requests.get('http://localhost:' + str(self.port) + '/path/file?foo=bar')
+        res = self.sesh.get('http://localhost:' + str(self.port) + '/path/file?foo=bar')
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
 
@@ -251,12 +253,14 @@ class Test_gevent_WSGIProx(BaseWSGIProx):
 
         cls.server_type = 'gevent'
 
+        cls.sesh_2 = requests.session()
+
     def test_proxy_auth_required(self, scheme):
         self.app.prefix_resolver = self.auth_resolver
 
         with pytest.raises(requests.exceptions.RequestException) as err:
-            res = requests.get('{0}://example.com/path/file?foo=bar'.format(scheme),
-                               proxies=self.proxies)
+            res = self.sesh_2.get('{0}://example.com/path/file?foo=bar'.format(scheme),
+                                  proxies=self.proxies)
 
             res.raise_for_status()
 
@@ -267,9 +271,9 @@ class Test_gevent_WSGIProx(BaseWSGIProx):
 
         proxies = self.proxy_dict(self.port, 'other-prefix:ignore@localhost')
 
-        res = requests.get('{0}://example.com/path/file?foo=bar'.format(scheme),
-                           proxies=proxies,
-                           verify=self.root_ca_file)
+        res = self.sesh_2.get('{0}://example.com/path/file?foo=bar'.format(scheme),
+                              proxies=proxies,
+                              verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /other-prefix/{0}://example.com/path/file?foo=bar'.format(scheme))
 
@@ -284,17 +288,17 @@ class Test_gevent_WSGIProx(BaseWSGIProx):
         proxies = self.proxy_dict(port)
 
         # http proxy not supported: just passes through
-        res = requests.get('http://example.com/path/file?foo=bar',
-                           proxies=proxies,
-                           verify=self.root_ca_file)
+        res = self.sesh_2.get('http://example.com/path/file?foo=bar',
+                              proxies=proxies,
+                              verify=self.root_ca_file)
 
         assert(res.text == 'Requested Url: /path/file?foo=bar')
 
         # https proxy (via CONNECT) not supported
         with pytest.raises(requests.exceptions.ProxyError) as err:
-            res = requests.get('https://example.com/path/file?foo=bar',
-                               proxies=proxies,
-                               verify=self.root_ca_file)
+            res = self.sesh_2.get('https://example.com/path/file?foo=bar',
+                                  proxies=proxies,
+                                  verify=self.root_ca_file)
 
         assert '405 ' in str(err.value)
 
