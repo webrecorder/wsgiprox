@@ -5,6 +5,18 @@ import gevent
 
 import sys
 
+
+# Fix for KEEP_CNT in Windows, per (https://bugs.python.org/issue32394#msg308943)
+if sys.version_info >= (3,6,4) and hasattr(sys, 'getwindowsversion') and sys.getwindowsversion()[0] < 10:
+    import socket
+
+    if hasattr(socket, 'TCP_KEEPCNT'):
+        del socket.TCP_KEEPCNT
+
+    if hasattr(socket, 'TCP_FASTOPEN'):
+        del socket.TCP_FASTOPEN
+
+
 import requests
 import websocket
 import pytest
