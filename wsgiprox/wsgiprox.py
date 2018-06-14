@@ -469,11 +469,17 @@ class WSGIProxMiddleware(object):
             if curr_sock and curr_sock != raw_sock:
                 # this seems to necessary to avoid tls data read later
                 # in the same gevent
-                if self.is_gevent_ssl:
-                    curr_sock.recv(0)
+                try:
+                    if self.is_gevent_ssl:
+                        curr_sock.recv(0)
 
-                curr_sock.shutdown()
-                curr_sock.close()
+                    curr_sock.shutdown()
+
+                except:
+                    pass
+
+                finally:
+                    curr_sock.close()
 
             start_response('200 OK', [])
 

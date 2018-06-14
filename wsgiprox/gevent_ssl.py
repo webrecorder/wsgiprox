@@ -78,4 +78,9 @@ class SSLConnection(object):
             return b''
 
     def shutdown(self):
-        return self.__iowait(self._connection.shutdown)
+        try:
+            return self.__iowait(self._connection.shutdown)
+        except OpenSSL.SSL.SysCallError as e:
+            return False
+
+
