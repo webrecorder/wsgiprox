@@ -98,6 +98,14 @@ class BaseWSGIProx(object):
         assert(res.headers['Content-Length'] != '')
         assert(res.text == 'Requested Url: /prefix/{0}://example.com:123/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
 
+    def test_non_chunked_ip_port(self, scheme):
+        res = self.sesh.get('{0}://10.0.1.10:7890/path/file?foo=bar&addproxyhost=true'.format(scheme),
+                           proxies=self.proxies,
+                           verify=self.root_ca_file)
+
+        assert(res.headers['Content-Length'] != '')
+        assert(res.text == 'Requested Url: /prefix/{0}://10.0.1.10:7890/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox'.format(scheme))
+
     @pytest.mark.skipif(sys.version_info >= (3,0) and sys.version_info < (3,4),
                         reason='Not supported in py3.3')
     def test_with_sni(self):

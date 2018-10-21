@@ -19,7 +19,7 @@ class PyTest(TestCommand):
 
 setup(
     name='wsgiprox',
-    version='1.5.1',
+    version='1.5.2',
     author='Ilya Kreymer',
     author_email='ikreymer@gmail.com',
     license='Apache 2.0',
@@ -32,7 +32,7 @@ setup(
         ],
     install_requires=[
         'six',
-        'certauth>=1.2',
+        'certauth>=1.2.1',
         ],
     zip_safe=True,
     data_files=[
@@ -55,7 +55,7 @@ setup(
         'waitress',
     ],
     classifiers=[
-        'Development Status :: 4 - Beta',
+        'Development Status :: 5 - Production/Stable',
         'Environment :: Web Environment',
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python :: 2',
@@ -64,6 +64,7 @@ setup(
         'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
         'Topic :: Software Development :: Libraries :: Python Modules',
         'Topic :: Utilities',
     ]
