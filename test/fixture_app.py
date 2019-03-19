@@ -1,5 +1,6 @@
 from six.moves.urllib.parse import parse_qsl
 import os
+import six
 
 
 # ============================================================================
@@ -16,7 +17,7 @@ class CustomApp(object):
 
 
 # ============================================================================
-class ClosingTestReader(object):
+class ClosingTestReader(six.Iterator):
     stream_closed = False
 
     def __init__(self, buff):
