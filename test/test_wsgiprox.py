@@ -123,7 +123,6 @@ class BaseWSGIProx(object):
         assert(res.getheader('Content-Length') != '')
         assert(text == 'Requested Url: /prefix/https://example.com/path/file?foo=bar&addproxyhost=true Proxy Host: wsgiprox')
 
-
     def test_chunked(self, scheme):
         res = self.sesh.get('{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme),
                             proxies=self.proxies,
@@ -133,6 +132,24 @@ class BaseWSGIProx(object):
             assert(res.headers['Transfer-Encoding'] == 'chunked')
         assert(res.headers.get('Content-Length') == None)
         assert(res.text == 'Requested Url: /prefix/{0}://example.com/path/file?foo=bar&chunked=true'.format(scheme))
+
+    def test_stream_data_chunked(self, scheme):
+        from .fixture_app import ClosingTestReader
+        assert ClosingTestReader.stream_closed == False
+
+        res = self.sesh.get('{0}://example.com/path/filename?stream=true&data=Streaming Data: Some Data'.format(scheme),
+                           proxies=self.proxies,
+                           verify=self.root_ca_file)
+
+        if not (self.server_type == 'uwsgi' and scheme == 'http'):
+            assert(res.headers['Transfer-Encoding'] == 'chunked')
+        assert(res.headers.get('Content-Length') == None)
+        assert(res.text == 'Streaming Data: Some Data')
+
+        # only checkeable if not uwsgi, otherwise in separate process
+        if self.server_type != 'uwsgi':
+            assert ClosingTestReader.stream_closed == True
+        ClosingTestReader.stream_closed = False
 
     @patch('six.moves.http_client.HTTPConnection._http_vsn', 10)
     @patch('six.moves.http_client.HTTPConnection._http_vsn_str', 'HTTP/1.0')
@@ -342,7 +359,7 @@ class Test_uwsgi_WSGIProx(BaseWSGIProx):
         except Exception as e:
             pytest.skip('uwsgi not found, skipping uwsgi tests')
 
-        port_rx = re.compile('uwsgi socket 0 bound to TCP address :([\d]+)')
+        port_rx = re.compile(r'uwsgi socket 0 bound to TCP address :([\d]+)')
 
         while True:
             line = cls.uwsgi.stderr.readline().decode('utf-8')

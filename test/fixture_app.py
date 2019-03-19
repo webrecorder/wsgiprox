@@ -16,6 +16,29 @@ class CustomApp(object):
 
 
 # ============================================================================
+class ClosingTestReader(object):
+    stream_closed = False
+
+    def __init__(self, buff):
+        self.started = False
+        self.buff = buff
+        ClosingTestReader.stream_closed = False
+
+    def close(self):
+        ClosingTestReader.stream_closed = True
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self.started:
+            self.started = True
+            return self.buff
+        else:
+            raise StopIteration()
+
+
+# ============================================================================
 class TestWSGI(object):
     def __call__(self, env, start_response):
         status = '200 OK'
@@ -29,7 +52,13 @@ class TestWSGI(object):
             ws.send(msg)
             return []
 
+        if params.get('stream') == 'true':
+            result = ClosingTestReader(params.get('data').encode('utf-8'))
+            start_response(status, [])
+            return result
+
         result = 'Requested Url: ' + env.get('REQUEST_URI', '')
+
         if env['REQUEST_METHOD'] == 'POST':
             result += ' Post Data: ' + env['wsgi.input'].read(int(env['CONTENT_LENGTH'])).decode('utf-8')
 

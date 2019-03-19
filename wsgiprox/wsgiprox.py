@@ -173,19 +173,26 @@ class ConnectHandler(BaseHandler):
 
     def finish_response(self):
         resp_iter = self.wsgi(self.environ, self.start_response)
+        orig_resp_iter = resp_iter
 
-        if self._chunk:
-            resp_iter = self.chunk_encode(resp_iter)
+        try:
+            if self._chunk:
+                resp_iter = self.chunk_encode(resp_iter)
 
-        elif self._buffer and not self.headers_finished:
-            cl, resp_iter = self.buffer_iter(resp_iter)
-            self.writer.write(b'Content-Length: ' + cl.encode() + b'\r\n')
+            elif self._buffer and not self.headers_finished:
+                cl, resp_iter = self.buffer_iter(resp_iter)
+                self.writer.write(b'Content-Length: ' + cl.encode() + b'\r\n')
 
-        # finish headers after wsgi call
-        self.finish_headers()
+            # finish headers after wsgi call
+            self.finish_headers()
 
-        for obj in resp_iter:
-            self.writer.write(obj)
+            for obj in resp_iter:
+                self.writer.write(obj)
+
+        finally:
+            # ensure original response iter is closed if it has a close()
+            if orig_resp_iter and hasattr(orig_resp_iter, 'close'):
+                orig_resp_iter.close()
 
     def close(self):
         self.reader.close()
